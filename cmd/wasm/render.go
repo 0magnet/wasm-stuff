@@ -184,17 +184,19 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	generateForMode(selectedMode)
 
 	// Read slider values
-	cameraDist = float32(js.Global().Get("parseFloat").Invoke(cameraControl.Get("value")).Float())
+	zoomVal := float32(js.Global().Get("parseFloat").Invoke(cameraControl.Get("value")).Float())
 	rotationX = float32(js.Global().Get("parseFloat").Invoke(rotationControlsX.Get("value")).Float())
 	rotationY = float32(js.Global().Get("parseFloat").Invoke(rotationControlsY.Get("value")).Float())
 	rotationZ = float32(js.Global().Get("parseFloat").Invoke(rotationControlsZ.Get("value")).Float())
-	sliderZoom.Set("textContent", strconv.FormatFloat(float64(cameraDist), 'f', 1, 64))
+	sliderZoom.Set("textContent", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
 	sliderX.Set("textContent", strconv.FormatFloat(float64(rotationX), 'f', 1, 64))
 	sliderY.Set("textContent", strconv.FormatFloat(float64(rotationY), 'f', 1, 64))
 	sliderZ.Set("textContent", strconv.FormatFloat(float64(rotationZ), 'f', 1, 64))
 
-	if cameraDist != 0 {
-		defaultCameraDist += cameraDist
+	// Zoom slider directly controls camera distance (absolute position)
+	newDist := initCameraDist - zoomVal
+	if newDist != defaultCameraDist {
+		defaultCameraDist = newDist
 		updateViewMatrix()
 	}
 	if rotationX != 0 {

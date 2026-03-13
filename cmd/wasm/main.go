@@ -27,9 +27,8 @@ var (
 // ── Camera / view state ──────────────────────────────────────────────────────
 
 var (
-	initCameraDist                     float32 = 100
-	defaultCameraDist                  float32 = 100
-	cameraDist                         float32
+	initCameraDist    float32 = 100
+	defaultCameraDist float32 = 100
 	rotationX, rotationY, rotationZ    float32
 	rotationX1, rotationY1, rotationZ1 float32
 	movMatrix                          mgl32.Mat4
@@ -182,7 +181,7 @@ const controlsHTML = `
   <button class="rst" id="rst-color-top" title="Reset">↺</button>
   <span style="margin-left:8px;">
   <label>Zoom</label>
-  <input type="range" id="camera-zoom" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
+  <input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:120px;vertical-align:middle;">
   <output id="slider-value-zoom" style="margin-right:2px;width:24px;display:inline-block;">0</output>
   <button class="rst" id="rst-zoom" title="Reset">↺</button>
   <label style="margin-left:4px;">X</label>
@@ -286,9 +285,8 @@ func main() {
 	// Event: per-control reset buttons for camera/rotation
 	doc.Call("getElementById", "rst-zoom").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		defaultCameraDist = initCameraDist
-		cameraDist = 0
 		cameraControl.Set("value", "0")
-		sliderZoom.Set("textContent", "0.0")
+		sliderZoom.Set("textContent", "0")
 		updateViewMatrix()
 		return nil
 	}))
@@ -463,7 +461,6 @@ func onColorChange(this js.Value, args []js.Value) interface{} {
 func onResetAll(this js.Value, args []js.Value) interface{} {
 	// Reset camera
 	defaultCameraDist = initCameraDist
-	cameraDist = 0
 	rotationX, rotationY, rotationZ = 0, 0, 0
 	rotationX1, rotationY1, rotationZ1 = 0, 0, 0
 	movMatrix = mgl32.Ident4()
