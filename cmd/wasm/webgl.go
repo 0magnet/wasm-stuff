@@ -50,22 +50,30 @@ func (types *GLTypes) New(gl js.Value) {
 	types.DynamicDraw = gl.Get("DYNAMIC_DRAW")
 }
 
-// updateGradientRange scans vertices (stride 3) and sets min/max uniforms for x and z.
+// updateGradientRange scans vertices (stride 4) and sets min/max uniforms for x, y, and z.
 // Only called on mode/param change, NOT per frame.
 func updateGradientRange(vertices []float32) {
-	if !shadersReady || len(vertices) < 3 {
+	if !shadersReady || len(vertices) < 4 {
 		return
 	}
 	minX := float32(math.MaxFloat32)
 	maxX := float32(-math.MaxFloat32)
+	minY := float32(math.MaxFloat32)
+	maxY := float32(-math.MaxFloat32)
 	minZ := float32(math.MaxFloat32)
 	maxZ := float32(-math.MaxFloat32)
-	for i := 0; i < len(vertices); i += 3 {
+	for i := 0; i < len(vertices); i += 4 {
 		if vertices[i] < minX {
 			minX = vertices[i]
 		}
 		if vertices[i] > maxX {
 			maxX = vertices[i]
+		}
+		if vertices[i+1] < minY {
+			minY = vertices[i+1]
+		}
+		if vertices[i+1] > maxY {
+			maxY = vertices[i+1]
 		}
 		if vertices[i+2] < minZ {
 			minZ = vertices[i+2]
@@ -76,26 +84,62 @@ func updateGradientRange(vertices []float32) {
 	}
 	gl.Call("uniform1f", uMinXLoc, float64(minX))
 	gl.Call("uniform1f", uMaxXLoc, float64(maxX))
+	gl.Call("uniform1f", uMinYLoc, float64(minY))
+	gl.Call("uniform1f", uMaxYLoc, float64(maxY))
 	gl.Call("uniform1f", uMinZLoc, float64(minZ))
 	gl.Call("uniform1f", uMaxZLoc, float64(maxZ))
 }
 
 // uploadVerticesOnly uploads vertex data and draws with drawArrays (no index buffer).
+// Subtracts a stable centerOffset (computed once on mode change) so rotations work naturally.
 // Uses persistent JS typed arrays for zero per-frame JS allocation.
 func uploadVerticesOnly(vertices []float32, drawMode js.Value, count int) {
+	n := len(vertices) / 4
+	if n > 0 {
+		if !centerReady {
+			centerWarmup++
+			var cx, cy, cz float32
+			for i := 0; i < len(vertices); i += 4 {
+				cx += vertices[i]
+				cy += vertices[i+1]
+				cz += vertices[i+2]
+			}
+			inv := 1.0 / float32(n)
+			centerOffset = [3]float32{cx * inv, cy * inv, cz * inv}
+			if centerWarmup >= 30 {
+				centerReady = true
+			}
+		}
+		for i := 0; i < len(vertices); i += 4 {
+			vertices[i] -= centerOffset[0]
+			vertices[i+1] -= centerOffset[1]
+			vertices[i+2] -= centerOffset[2]
+		}
+	}
 	attractorVertices = vertices
+	// Set stride-4 attribute pointers for interleaved data
+	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
+	gl.Call("vertexAttribPointer", positionLoc, 3, glTypes.Float, false, 16, 0)
+	gl.Call("enableVertexAttribArray", positionLoc)
+	gl.Call("vertexAttribPointer", aTrailTLoc, 1, glTypes.Float, false, 16, 12)
+	gl.Call("enableVertexAttribArray", aTrailTLoc)
 	js.CopyBytesToJS(jsVertUint8, sliceToByteSlice(vertices))
 	runtime.KeepAlive(vertices)
-	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
 	gl.Call("bufferData", glTypes.ArrayBuffer, jsVertFloat, glTypes.StaticDraw)
 	gl.Call("drawArrays", drawMode, 0, count)
 }
 
 // uploadBuffersIndexed uploads and draws with drawElements.
+// Uses packed stride-0 (xyz only), disabling the trail attribute.
 func uploadBuffersIndexed(vertices []float32, indices []uint16, drawMode js.Value) {
 	attractorVertices = vertices
 	attractorIndices = indices
 	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
+	// Switch to packed xyz stride for indexed geometry
+	gl.Call("vertexAttribPointer", positionLoc, 3, glTypes.Float, false, 0, 0)
+	gl.Call("enableVertexAttribArray", positionLoc)
+	gl.Call("disableVertexAttribArray", aTrailTLoc)
+	gl.Call("vertexAttrib1f", aTrailTLoc, 0.0)
 	gl.Call("bufferData", glTypes.ArrayBuffer, SliceToTypedArray(attractorVertices), glTypes.StaticDraw)
 	gl.Call("bindBuffer", glTypes.ElementArrayBuffer, attractorIndexBuffer)
 	gl.Call("bufferData", glTypes.ElementArrayBuffer, SliceToTypedArray(attractorIndices), glTypes.StaticDraw)

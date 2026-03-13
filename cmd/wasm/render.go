@@ -19,25 +19,80 @@ var fragShaderCode = `
 	uniform float uMaxZ;
 	uniform float uMinX;
 	uniform float uMaxX;
+	uniform float uMinY;
+	uniform float uMaxY;
 	uniform int uGradientMode;
+	uniform int uGradientReverse;
 	varying vec3 vPosition;
+	varying float vTrailT;
+
+	vec3 hsv2rgb(vec3 c) {
+		vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+		vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+		return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+	}
+
 	void main(void) {
+		float t;
 		vec3 color;
+		// Mode 0: Z two-color, 1: X three-color, 2: Y two-color, 3: X two-color
+		// Mode 4: Trail rainbow, 5: Trail two-color, 6: Trail three-color
+		// Mode 7: Z rainbow, 8: X rainbow, 9: Y rainbow
 		if (uGradientMode == 1) {
-			// Lorenz dual-lobe: x-based three-color gradient
-			// left lobe (base) -> origin (mid) -> right lobe (top)
 			float xRange = max(uMaxX - uMinX, 0.001);
-			float tx = clamp((vPosition.x - uMinX) / xRange, 0.0, 1.0);
-			if (tx < 0.5) {
-				color = mix(uBaseColor, uMidColor, tx * 2.0);
+			t = clamp((vPosition.x - uMinX) / xRange, 0.0, 1.0);
+			if (uGradientReverse == 1) t = 1.0 - t;
+			if (t < 0.5) {
+				color = mix(uBaseColor, uMidColor, t * 2.0);
 			} else {
-				color = mix(uMidColor, uTopColor, (tx - 0.5) * 2.0);
+				color = mix(uMidColor, uTopColor, (t - 0.5) * 2.0);
 			}
-		} else {
-			// Standard: z-based two-color gradient
+		} else if (uGradientMode == 2) {
+			float yRange = max(uMaxY - uMinY, 0.001);
+			t = clamp((vPosition.y - uMinY) / yRange, 0.0, 1.0);
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = mix(uBaseColor, uTopColor, t);
+		} else if (uGradientMode == 3) {
+			float xRange = max(uMaxX - uMinX, 0.001);
+			t = clamp((vPosition.x - uMinX) / xRange, 0.0, 1.0);
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = mix(uBaseColor, uTopColor, t);
+		} else if (uGradientMode == 4) {
+			t = vTrailT;
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = hsv2rgb(vec3(t, 1.0, 1.0));
+		} else if (uGradientMode == 5) {
+			t = vTrailT;
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = mix(uBaseColor, uTopColor, t);
+		} else if (uGradientMode == 6) {
+			t = vTrailT;
+			if (uGradientReverse == 1) t = 1.0 - t;
+			if (t < 0.5) {
+				color = mix(uBaseColor, uMidColor, t * 2.0);
+			} else {
+				color = mix(uMidColor, uTopColor, (t - 0.5) * 2.0);
+			}
+		} else if (uGradientMode == 7) {
 			float zRange = max(uMaxZ - uMinZ, 0.001);
-			float tz = clamp((vPosition.z - uMinZ) / zRange, 0.0, 1.0);
-			color = mix(uBaseColor, uTopColor, tz);
+			t = clamp((vPosition.z - uMinZ) / zRange, 0.0, 1.0);
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = hsv2rgb(vec3(t, 1.0, 1.0));
+		} else if (uGradientMode == 8) {
+			float xRange = max(uMaxX - uMinX, 0.001);
+			t = clamp((vPosition.x - uMinX) / xRange, 0.0, 1.0);
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = hsv2rgb(vec3(t, 1.0, 1.0));
+		} else if (uGradientMode == 9) {
+			float yRange = max(uMaxY - uMinY, 0.001);
+			t = clamp((vPosition.y - uMinY) / yRange, 0.0, 1.0);
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = hsv2rgb(vec3(t, 1.0, 1.0));
+		} else {
+			float zRange = max(uMaxZ - uMinZ, 0.001);
+			t = clamp((vPosition.z - uMinZ) / zRange, 0.0, 1.0);
+			if (uGradientReverse == 1) t = 1.0 - t;
+			color = mix(uBaseColor, uTopColor, t);
 		}
 		gl_FragColor = vec4(color, 1.0);
 	}
@@ -45,14 +100,17 @@ var fragShaderCode = `
 
 var vertShaderCode = `
 	attribute vec3 position;
+	attribute float aTrailT;
 	uniform mat4 Pmatrix;
 	uniform mat4 Vmatrix;
 	uniform mat4 Mmatrix;
 	varying vec3 vPosition;
+	varying float vTrailT;
 	void main(void) {
 		gl_Position = Pmatrix * Vmatrix * Mmatrix * vec4(position, 1.0);
 		gl_PointSize = 2.0;
 		vPosition = position;
+		vTrailT = aTrailT;
 	}
 `
 
@@ -69,10 +127,15 @@ func setupShaders() {
 	gl.Call("attachShader", shaderProgram, fragShader)
 	gl.Call("linkProgram", shaderProgram)
 
-	position := gl.Call("getAttribLocation", shaderProgram, "position")
-	gl.Call("vertexAttribPointer", position, 3, glTypes.Float, false, 0, 0)
-	gl.Call("enableVertexAttribArray", position)
+	positionLoc = gl.Call("getAttribLocation", shaderProgram, "position")
+	aTrailTLoc = gl.Call("getAttribLocation", shaderProgram, "aTrailT")
 	gl.Call("useProgram", shaderProgram)
+
+	// Set stride-4 attribute pointers (16 bytes per vertex: x,y,z,t)
+	gl.Call("vertexAttribPointer", positionLoc, 3, glTypes.Float, false, 16, 0)
+	gl.Call("enableVertexAttribArray", positionLoc)
+	gl.Call("vertexAttribPointer", aTrailTLoc, 1, glTypes.Float, false, 16, 12)
+	gl.Call("enableVertexAttribArray", aTrailTLoc)
 
 	uBaseColorLoc = gl.Call("getUniformLocation", shaderProgram, "uBaseColor")
 	uTopColorLoc = gl.Call("getUniformLocation", shaderProgram, "uTopColor")
@@ -81,7 +144,10 @@ func setupShaders() {
 	uMaxZLoc = gl.Call("getUniformLocation", shaderProgram, "uMaxZ")
 	uMinXLoc = gl.Call("getUniformLocation", shaderProgram, "uMinX")
 	uMaxXLoc = gl.Call("getUniformLocation", shaderProgram, "uMaxX")
+	uMinYLoc = gl.Call("getUniformLocation", shaderProgram, "uMinY")
+	uMaxYLoc = gl.Call("getUniformLocation", shaderProgram, "uMaxY")
 	uGradientModeLoc = gl.Call("getUniformLocation", shaderProgram, "uGradientMode")
+	uGradientReverseLoc = gl.Call("getUniformLocation", shaderProgram, "uGradientReverse")
 	gl.Call("uniform3f", uBaseColorLoc, baseColor[0], baseColor[1], baseColor[2])
 	gl.Call("uniform3f", uTopColorLoc, topColor[0], topColor[1], topColor[2])
 	gl.Call("uniform3f", uMidColorLoc, midColor[0], midColor[1], midColor[2])
@@ -89,7 +155,10 @@ func setupShaders() {
 	gl.Call("uniform1f", uMaxZLoc, float64(1))
 	gl.Call("uniform1f", uMinXLoc, float64(-1))
 	gl.Call("uniform1f", uMaxXLoc, float64(1))
+	gl.Call("uniform1f", uMinYLoc, float64(-1))
+	gl.Call("uniform1f", uMaxYLoc, float64(1))
 	gl.Call("uniform1i", uGradientModeLoc, 0)
+	gl.Call("uniform1i", uGradientReverseLoc, 0)
 	shadersReady = true
 
 	gl.Call("clearColor", 0, 0, 0, 0)
@@ -112,19 +181,7 @@ func setupMatrices() {
 func updateViewMatrix() {
 	cameraPosition := mgl32.Vec3{0.0, 0.0, defaultCameraDist}
 	center := mgl32.Vec3{0.0, 0.0, 0.0}
-	if len(attractorVertices) > 0 {
-		for i := 0; i < len(attractorVertices); i += 3 {
-			center[0] += attractorVertices[i]
-			center[1] += attractorVertices[i+1]
-			center[2] += attractorVertices[i+2]
-		}
-		center = center.Mul(1.0 / float32(len(attractorVertices)/3))
-	}
-	cameraDirection := center.Sub(cameraPosition).Normalize()
-	upVector := mgl32.Vec3{0.0, 1.0, 0.0}
-	rightVector := cameraDirection.Cross(upVector).Normalize()
-	newUpVector := rightVector.Cross(cameraDirection)
-	viewMatrix := mgl32.LookAtV(cameraPosition, center, newUpVector)
+	viewMatrix := mgl32.LookAtV(cameraPosition, center, mgl32.Vec3{0.0, 1.0, 0.0})
 	viewMatrixBuffer := (*[16]float32)(unsafe.Pointer(&viewMatrix))
 	typedViewMatrixBuffer := SliceToTypedArray([]float32((*viewMatrixBuffer)[:]))
 	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Vmatrix"), false, typedViewMatrixBuffer)
@@ -167,10 +224,11 @@ func autoFitCamera() {
 
 func generateForMode(mode string) {
 	if shadersReady {
-		if mode == "lorenz" {
-			gl.Call("uniform1i", uGradientModeLoc, 1)
+		gl.Call("uniform1i", uGradientModeLoc, gradientMode)
+		if gradientReverse {
+			gl.Call("uniform1i", uGradientReverseLoc, 1)
 		} else {
-			gl.Call("uniform1i", uGradientModeLoc, 0)
+			gl.Call("uniform1i", uGradientReverseLoc, 0)
 		}
 	}
 	switch mode {
@@ -198,8 +256,16 @@ func generateForMode(mode string) {
 		generateRabinovich()
 	case "burkeshaw":
 		generateBurkeShaw()
+	case "tetrahedron":
+		generateTetrahedron()
 	case "cube":
 		generateCube()
+	case "octahedron":
+		generateOctahedron()
+	case "dodecahedron":
+		generateDodecahedron()
+	case "icosahedron":
+		generateIcosahedron()
 	case "nestedcube":
 		generateNestedCube()
 	case "sphere":
@@ -220,8 +286,13 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	totalelapsed += tdiff
 
 	gl.Call("enable", glTypes.DepthTest)
-	gl.Call("clear", glTypes.ColorBufferBit)
-	gl.Call("clear", glTypes.DepthBufferBit)
+	if !persistTrail {
+		gl.Call("clear", glTypes.ColorBufferBit)
+		gl.Call("clear", glTypes.DepthBufferBit)
+	} else {
+		// Only clear depth so new draws appear on top, but keep color buffer (old trails)
+		gl.Call("clear", glTypes.DepthBufferBit)
+	}
 
 	generateForMode(selectedMode)
 

@@ -15,8 +15,12 @@ import (
 var (
 	x, y, z   float32 = 0.1, 0.5, -0.6
 	steps     int     = 20000
-	vertBuf           = make([]float32, 20000*3) // pre-allocated vertex buffer for attractors
+	vertBuf           = make([]float32, 20000*4) // pre-allocated vertex buffer (stride 4: x,y,z,t)
 	speedMult float32 = 1.0
+	// centerOffset is computed after warmup frames and then held stable
+	centerOffset [3]float32
+	centerReady  bool
+	centerWarmup int
 )
 
 // attractorDrawMode is the GL draw mode (LineStrip or Points) — set after glTypes.New.
@@ -55,6 +59,9 @@ var (
 	autoRotate      bool    = true
 	autoRotateSpeed float32 = 0.005
 	usePoints       bool    = false
+	persistTrail    bool    = false
+	gradientMode    int     = 0 // current gradient mode uniform value
+	gradientReverse bool    = false
 	dragging        bool    = false
 	dragLastX       float32
 	dragLastY       float32
@@ -102,10 +109,15 @@ var (
 	uMidColorLoc      js.Value
 	uMinZLoc          js.Value
 	uMaxZLoc          js.Value
-	uMinXLoc          js.Value
-	uMaxXLoc          js.Value
-	uGradientModeLoc  js.Value
-	shadersReady      bool
+	uMinXLoc            js.Value
+	uMaxXLoc            js.Value
+	uMinYLoc            js.Value
+	uMaxYLoc            js.Value
+	uGradientModeLoc    js.Value
+	uGradientReverseLoc js.Value
+	positionLoc         js.Value
+	aTrailTLoc          js.Value
+	shadersReady        bool
 	renderFrame       js.Func
 )
 
@@ -155,9 +167,9 @@ var attractorParams = map[string][]paramDef{
 		{"sprott-b", "b", &sprottB, 1.8, 0.1, 5, 0.01},
 	},
 	"lissajou": {
-		{"lissajou-a", "a", &lissajouA, 9, 1, 30, 0.1},
-		{"lissajou-b", "b", &lissajouB, 4, 1, 30, 0.1},
-		{"lissajou-c", "c", &lissajouC, 25, 1, 50, 0.1},
+		{"lissajou-a", "a", &lissajouA, 3, 1, 20, 1},
+		{"lissajou-b", "b", &lissajouB, 2, 1, 20, 1},
+		{"lissajou-c", "c", &lissajouC, 5, 1, 20, 1},
 	},
 	"thomas": {
 		{"thomas-dt", "dt", &thomasDT, 0.05, 0.001, 0.1, 0.001},
@@ -193,10 +205,14 @@ var attractorParams = map[string][]paramDef{
 	},
 	"sphere": {
 		{"sphere-r", "radius", &sphereRadius, 1.0, 0.1, 5, 0.1},
+		{"sphere-stacks", "lat", &sphereStacksF, 30, 4, 100, 1},
+		{"sphere-slices", "lon", &sphereSlicesF, 30, 4, 100, 1},
 	},
 	"torus": {
 		{"torus-R", "R", &torusR, 1.5, 0.1, 5, 0.1},
 		{"torus-r", "r", &torusr, 0.5, 0.1, 3, 0.1},
+		{"torus-stacks", "stacks", &torusStacksF, 30, 4, 100, 1},
+		{"torus-slices", "slices", &torusSlicesF, 30, 4, 100, 1},
 	},
 }
 
@@ -222,7 +238,11 @@ const controlsHTML = `
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="dadras"> Dadras</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="rabinovich"> Rabinovich-Fabrikant</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="burkeshaw"> Burke-Shaw</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="tetrahedron"> Tetrahedron</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="cube"> Cube</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="octahedron"> Octahedron</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="dodecahedron"> Dodecahedron</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="icosahedron"> Icosahedron</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="nestedcube"> Nested Cube</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="sphere"> Sphere</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="torus"> Torus</label>
@@ -239,6 +259,20 @@ const controlsHTML = `
   <button class="rst" id="rst-color-top" title="Reset">↺</button>
   <label style="margin-left:8px;">BG <input type="color" id="color-bg" value="#000000"></label>
   <button class="rst" id="rst-color-bg" title="Reset">↺</button>
+  <label style="margin-left:8px;">Gradient
+  <select id="gradient-type" style="background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:11px;">
+    <option value="z2">Z Two-color</option>
+    <option value="x3">X Three-color</option>
+    <option value="y2">Y Two-color</option>
+    <option value="x2">X Two-color</option>
+    <option value="trail-rainbow">Trail Rainbow</option>
+    <option value="trail2">Trail Two-color</option>
+    <option value="trail3">Trail Three-color</option>
+    <option value="z-rainbow">Z Rainbow</option>
+    <option value="x-rainbow">X Rainbow</option>
+    <option value="y-rainbow">Y Rainbow</option>
+  </select></label>
+  <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="gradient-reverse"> Reverse</label>
   <span style="margin-left:8px;">
   <label>Zoom</label>
   <input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:120px;vertical-align:middle;">
@@ -264,9 +298,10 @@ const controlsHTML = `
   <button class="rst" id="rst-speed" title="Reset">↺</button>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
-  <label style="margin-left:8px;">Trail <input type="range" id="trail-slider" min="1000" max="50000" value="20000" step="1000" style="width:80px;vertical-align:middle;"></label>
-  <output id="slider-value-trail" style="width:40px;display:inline-block;">20000</output>
+  <label style="margin-left:8px;">Trail <input type="range" id="trail-slider" min="1000" max="500000" value="20000" step="1000" style="width:100px;vertical-align:middle;"></label>
+  <output id="slider-value-trail" style="width:50px;display:inline-block;">20000</output>
   <button class="rst" id="rst-trail" title="Reset">↺</button>
+  <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
   <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
   <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
@@ -364,22 +399,29 @@ func main() {
 		updateViewMatrix()
 		return nil
 	}))
+	stopAutoRotate := func() {
+		autoRotate = false
+		doc.Call("getElementById", "auto-rotate").Set("checked", false)
+	}
 	doc.Call("getElementById", "rst-rx").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationX, rotationX1 = 0, 0
 		rotationControlsX.Set("value", "0")
 		sliderX.Set("textContent", "0.0")
+		stopAutoRotate()
 		return nil
 	}))
 	doc.Call("getElementById", "rst-ry").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationY, rotationY1 = 0, 0
 		rotationControlsY.Set("value", "0")
 		sliderY.Set("textContent", "0.0")
+		stopAutoRotate()
 		return nil
 	}))
 	doc.Call("getElementById", "rst-rz").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationZ, rotationZ1 = 0, 0
 		rotationControlsZ.Set("value", "0")
 		sliderZ.Set("textContent", "0.0")
+		stopAutoRotate()
 		return nil
 	}))
 
@@ -426,11 +468,11 @@ func main() {
 			newSteps := int(val)
 			if newSteps != steps {
 				steps = newSteps
-				vertBuf = make([]float32, steps*3)
-				jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 3 * 4)
+				vertBuf = make([]float32, steps*4)
+				jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 4 * 4)
 				buf := jsVertUint8.Get("buffer")
-				jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*3)
-				x, y, z = 0.1, 0.5, -0.6
+				jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
+				resetAttractorState()
 				refreshGradient()
 			}
 			doc.Call("getElementById", "slider-value-trail").Set("textContent", strconv.FormatFloat(val, 'f', 0, 64))
@@ -439,14 +481,22 @@ func main() {
 	}))
 	doc.Call("getElementById", "rst-trail").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		steps = 20000
-		vertBuf = make([]float32, steps*3)
-		jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 3 * 4)
+		vertBuf = make([]float32, steps*4)
+		jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 4 * 4)
 		buf := jsVertUint8.Get("buffer")
-		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*3)
+		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
 		doc.Call("getElementById", "trail-slider").Set("value", "20000")
 		doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
-		x, y, z = 0.1, 0.5, -0.6
+		persistTrail = false
+		doc.Call("getElementById", "persist-trail").Set("checked", false)
+		resetAttractorState()
 		refreshGradient()
+		return nil
+	}))
+
+	// Event: persist trail checkbox
+	doc.Call("getElementById", "persist-trail").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		persistTrail = doc.Call("getElementById", "persist-trail").Get("checked").Bool()
 		return nil
 	}))
 
@@ -461,6 +511,24 @@ func main() {
 		bgColor = [3]float32{0, 0, 0}
 		doc.Call("getElementById", "color-bg").Set("value", "#000000")
 		gl.Call("clearColor", 0, 0, 0, 1.0)
+		return nil
+	}))
+
+	// Event: gradient type selector
+	gradientTypeMap := map[string]int{
+		"z2": 0, "x3": 1, "y2": 2, "x2": 3,
+		"trail-rainbow": 4, "trail2": 5, "trail3": 6,
+		"z-rainbow": 7, "x-rainbow": 8, "y-rainbow": 9,
+	}
+	doc.Call("getElementById", "gradient-type").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		val := doc.Call("getElementById", "gradient-type").Get("value").String()
+		if mode, ok := gradientTypeMap[val]; ok {
+			gradientMode = mode
+		}
+		return nil
+	}))
+	doc.Call("getElementById", "gradient-reverse").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		gradientReverse = doc.Call("getElementById", "gradient-reverse").Get("checked").Bool()
 		return nil
 	}))
 
@@ -576,7 +644,7 @@ func main() {
 		} else {
 			// Check non-parameterized modes
 			switch hashMode {
-			case "cube", "nestedcube", "magnetosphere":
+			case "tetrahedron", "cube", "octahedron", "dodecahedron", "icosahedron", "nestedcube", "magnetosphere":
 				selectedMode = hashMode
 			}
 		}
@@ -589,9 +657,9 @@ func main() {
 	buildParamPanel(selectedMode)
 
 	// Initialize persistent JS typed arrays for zero-alloc frame uploads
-	jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 3 * 4)
+	jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 4 * 4)
 	buf := jsVertUint8.Get("buffer")
-	jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*3)
+	jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
 
 	// Initialize WebGL
 	glTypes.New(gl)
@@ -624,7 +692,50 @@ func main() {
 	<-done
 }
 
+// Per-attractor initial conditions — defaults to (0.1, 0.5, -0.6) for most.
+var attractorInitCond = map[string][3]float32{
+	"rabinovich": {-1.0, 0.0, 0.5},
+	"burkeshaw":  {0.6, 0.0, 0.0},
+	"chen":       {-0.1, 0.5, -0.6},
+	"thomas":     {1.0, 0.0, 0.0},
+	"halvorsen":  {-1.5, -1.5, -1.5},
+}
+
+func resetAttractorState() {
+	if ic, ok := attractorInitCond[selectedMode]; ok {
+		x, y, z = ic[0], ic[1], ic[2]
+	} else {
+		x, y, z = 0.1, 0.5, -0.6
+	}
+	centerReady = false
+	centerWarmup = 0
+}
+
 // ── UI helpers ───────────────────────────────────────────────────────────────
+
+// decimalsForStep returns the number of decimal places needed to represent a step value.
+func decimalsForStep(step float32) int {
+	s := strconv.FormatFloat(float64(step), 'f', 10, 32)
+	dot := -1
+	for i, c := range s {
+		if c == '.' {
+			dot = i
+			break
+		}
+	}
+	if dot < 0 {
+		return 0
+	}
+	// Find last non-zero digit after the dot
+	last := dot
+	for i := len(s) - 1; i > dot; i-- {
+		if s[i] != '0' {
+			last = i
+			break
+		}
+	}
+	return last - dot
+}
 
 func buildParamPanel(mode string) {
 	paramsDiv := doc.Call("getElementById", "params")
@@ -637,6 +748,7 @@ func buildParamPanel(mode string) {
 
 	for _, p := range params {
 		p := p // capture for closure
+		dec := decimalsForStep(p.Step)
 
 		span := doc.Call("createElement", "span")
 		span.Set("style", "margin-right:10px;color:#888;display:inline-block;")
@@ -645,25 +757,46 @@ func buildParamPanel(mode string) {
 		lbl.Set("textContent", p.Label+" ")
 		span.Call("appendChild", lbl)
 
-		input := doc.Call("createElement", "input")
-		input.Set("type", "range")
-		input.Set("id", p.ID)
-		input.Set("min", strconv.FormatFloat(float64(p.Min), 'g', -1, 32))
-		input.Set("max", strconv.FormatFloat(float64(p.Max), 'g', -1, 32))
-		input.Set("value", strconv.FormatFloat(float64(*p.Value), 'g', -1, 32))
-		input.Set("step", strconv.FormatFloat(float64(p.Step), 'g', -1, 32))
-		input.Set("style", "width:80px;vertical-align:middle;")
+		stepStr := strconv.FormatFloat(float64(p.Step), 'g', -1, 32)
+		minStr := strconv.FormatFloat(float64(p.Min), 'g', -1, 32)
+		maxStr := strconv.FormatFloat(float64(p.Max), 'g', -1, 32)
 
-		output := doc.Call("createElement", "output")
-		output.Set("style", "width:40px;display:inline-block;font-size:11px;text-align:left;margin-left:2px;")
-		output.Set("textContent", strconv.FormatFloat(float64(*p.Value), 'g', -1, 32))
+		slider := doc.Call("createElement", "input")
+		slider.Set("type", "range")
+		slider.Set("id", p.ID)
+		slider.Set("min", minStr)
+		slider.Set("max", maxStr)
+		slider.Set("value", strconv.FormatFloat(float64(*p.Value), 'g', -1, 32))
+		slider.Set("step", stepStr)
+		slider.Set("style", "width:80px;vertical-align:middle;")
 
-		input.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			val, err := strconv.ParseFloat(input.Get("value").String(), 32)
+		numInput := doc.Call("createElement", "input")
+		numInput.Set("type", "number")
+		numInput.Set("min", minStr)
+		numInput.Set("max", maxStr)
+		numInput.Set("step", stepStr)
+		numInput.Set("value", strconv.FormatFloat(float64(*p.Value), 'f', dec, 64))
+		numInput.Set("style", "width:60px;background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:11px;margin-left:2px;vertical-align:middle;")
+
+		// Slider → number input
+		slider.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			val, err := strconv.ParseFloat(slider.Get("value").String(), 64)
 			if err == nil {
 				*p.Value = float32(val)
-				output.Set("textContent", strconv.FormatFloat(val, 'g', -1, 32))
-				x, y, z = 0.1, 0.5, -0.6
+				numInput.Set("value", strconv.FormatFloat(val, 'f', dec, 64))
+				resetAttractorState()
+				refreshGradient()
+			}
+			return nil
+		}))
+
+		// Number input → slider
+		numInput.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			val, err := strconv.ParseFloat(numInput.Get("value").String(), 64)
+			if err == nil {
+				*p.Value = float32(val)
+				slider.Set("value", strconv.FormatFloat(val, 'g', -1, 64))
+				resetAttractorState()
 				refreshGradient()
 			}
 			return nil
@@ -677,16 +810,35 @@ func buildParamPanel(mode string) {
 		rst.Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			*p.Value = p.Def
 			defStr := strconv.FormatFloat(float64(p.Def), 'g', -1, 32)
-			input.Set("value", defStr)
-			output.Set("textContent", defStr)
-			x, y, z = 0.1, 0.5, -0.6
+			slider.Set("value", defStr)
+			numInput.Set("value", strconv.FormatFloat(float64(p.Def), 'f', dec, 64))
+			resetAttractorState()
 			refreshGradient()
 			return nil
 		}))
 
-		span.Call("appendChild", input)
-		span.Call("appendChild", output)
+		// Step-size input
+		stepInput := doc.Call("createElement", "input")
+		stepInput.Set("type", "number")
+		stepInput.Set("min", "0.0000001")
+		stepInput.Set("step", "any")
+		stepInput.Set("value", stepStr)
+		stepInput.Set("title", "Step size")
+		stepInput.Set("style", "width:50px;background:#1a1a1a;color:#666;border:1px solid #444;font-family:monospace;font-size:10px;margin-left:1px;vertical-align:middle;")
+		stepInput.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			val, err := strconv.ParseFloat(stepInput.Get("value").String(), 64)
+			if err == nil && val > 0 {
+				newStep := strconv.FormatFloat(val, 'g', -1, 64)
+				slider.Set("step", newStep)
+				numInput.Set("step", newStep)
+			}
+			return nil
+		}))
+
+		span.Call("appendChild", slider)
+		span.Call("appendChild", numInput)
 		span.Call("appendChild", rst)
+		span.Call("appendChild", stepInput)
 		paramsDiv.Call("appendChild", span)
 	}
 }
@@ -711,7 +863,7 @@ func refreshGradient() {
 
 func onModeChange(this js.Value, args []js.Value) interface{} {
 	selectedMode = doc.Call("querySelector", `input[name="mode"]:checked`).Get("value").String()
-	x, y, z = 0.1, 0.5, -0.6
+	resetAttractorState()
 	buildParamPanel(selectedMode)
 	// Update URL hash
 	js.Global().Get("location").Set("hash", selectedMode)
@@ -743,7 +895,7 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	movMatrix = mgl32.Ident4()
 
 	// Reset attractor position
-	x, y, z = 0.1, 0.5, -0.6
+	resetAttractorState()
 
 	// Reset sliders
 	cameraControl.Set("value", "0")
@@ -775,13 +927,19 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	doc.Call("getElementById", "use-points").Set("checked", false)
 	if steps != 20000 {
 		steps = 20000
-		vertBuf = make([]float32, steps*3)
-		jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 3 * 4)
+		vertBuf = make([]float32, steps*4)
+		jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 4 * 4)
 		buf := jsVertUint8.Get("buffer")
-		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*3)
+		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
 	}
 	doc.Call("getElementById", "trail-slider").Set("value", "20000")
 	doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
+	persistTrail = false
+	doc.Call("getElementById", "persist-trail").Set("checked", false)
+	gradientMode = 0
+	gradientReverse = false
+	doc.Call("getElementById", "gradient-type").Set("value", "z2")
+	doc.Call("getElementById", "gradient-reverse").Set("checked", false)
 
 	// Reset colors
 	baseColor = [3]float32{1.0, 0.0, 0.0}

@@ -1,0 +1,91 @@
+//go:build js && wasm
+
+package main
+
+import "math"
+
+func generateTetrahedron() {
+	s := float32(1.0)
+	vertices := []float32{
+		s, s, s,
+		s, -s, -s,
+		-s, s, -s,
+		-s, -s, s,
+	}
+	indices := []uint16{
+		0, 1, 2,
+		0, 1, 3,
+		0, 2, 3,
+		1, 2, 3,
+	}
+	uploadBuffersIndexed(vertices, indices, glTypes.Line)
+}
+
+func generateOctahedron() {
+	vertices := []float32{
+		1, 0, 0,
+		-1, 0, 0,
+		0, 1, 0,
+		0, -1, 0,
+		0, 0, 1,
+		0, 0, -1,
+	}
+	indices := []uint16{
+		0, 2, 4, 0, 2, 5,
+		0, 3, 4, 0, 3, 5,
+		1, 2, 4, 1, 2, 5,
+		1, 3, 4, 1, 3, 5,
+	}
+	uploadBuffersIndexed(vertices, indices, glTypes.Line)
+}
+
+func generateDodecahedron() {
+	phi := float32((1 + math.Sqrt(5)) / 2) // golden ratio
+	invPhi := float32(1) / phi
+	vertices := []float32{
+		// cube vertices
+		1, 1, 1, 1, 1, -1, 1, -1, 1, 1, -1, -1,
+		-1, 1, 1, -1, 1, -1, -1, -1, 1, -1, -1, -1,
+		// rectangle vertices on xy plane
+		0, phi, invPhi, 0, phi, -invPhi, 0, -phi, invPhi, 0, -phi, -invPhi,
+		// rectangle vertices on yz plane
+		invPhi, 0, phi, invPhi, 0, -phi, -invPhi, 0, phi, -invPhi, 0, -phi,
+		// rectangle vertices on xz plane
+		phi, invPhi, 0, phi, -invPhi, 0, -phi, invPhi, 0, -phi, -invPhi, 0,
+	}
+	// Edges of a dodecahedron (30 edges)
+	indices := []uint16{
+		0, 8, 0, 12, 0, 16,
+		1, 9, 1, 13, 1, 16,
+		2, 10, 2, 12, 2, 17,
+		3, 11, 3, 13, 3, 17,
+		4, 8, 4, 14, 4, 18,
+		5, 9, 5, 15, 5, 18,
+		6, 10, 6, 14, 6, 19,
+		7, 11, 7, 15, 7, 19,
+		8, 9, 10, 11, 12, 14,
+		13, 15, 16, 17, 18, 19,
+	}
+	uploadBuffersIndexed(vertices, indices, glTypes.Line)
+}
+
+func generateIcosahedron() {
+	phi := float32((1 + math.Sqrt(5)) / 2)
+	vertices := []float32{
+		0, 1, phi, 0, 1, -phi, 0, -1, phi, 0, -1, -phi,
+		1, phi, 0, 1, -phi, 0, -1, phi, 0, -1, -phi, 0,
+		phi, 0, 1, phi, 0, -1, -phi, 0, 1, -phi, 0, -1,
+	}
+	indices := []uint16{
+		0, 2, 0, 4, 0, 6, 0, 8, 0, 10,
+		1, 3, 1, 4, 1, 6, 1, 9, 1, 11,
+		2, 5, 2, 8, 2, 10,
+		3, 5, 3, 9, 3, 11,
+		4, 6, 4, 8, 4, 9,
+		5, 7, 5, 8, 5, 9,
+		6, 10, 6, 11,
+		7, 10, 7, 11,
+		7, 2, 7, 3,
+	}
+	uploadBuffersIndexed(vertices, indices, glTypes.Line)
+}
