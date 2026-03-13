@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WASM Stuff - {{.Page.Title}} Strange Attractor Visualizer</title>
+<meta name="description" content="Interactive 3D strange attractor visualizer built with {{.Page.Title}} and WebAssembly. Explore Lorenz, Rossler, Chua, Aizawa, Sprott, and Lissajous attractors with real-time WebGL rendering.">
+<meta name="keywords" content="strange attractor, WebAssembly, WASM, WebGL, Lorenz, Rossler, Chua, Aizawa, Sprott, Lissajous, 3D visualization, Go, TinyGo">
+<meta name="author" content="0magnet">
+<meta property="og:title" content="WASM Stuff - {{.Page.Title}} Strange Attractor Visualizer">
+<meta property="og:description" content="Interactive 3D strange attractor visualizer built with {{.Page.Title}} and WebAssembly. Explore Lorenz, Rossler, Chua, Aizawa, and more.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="WASM Stuff - {{.Page.Title}} Strange Attractor Visualizer">
+<meta name="twitter:description" content="Interactive 3D strange attractor visualizer built with {{.Page.Title}} and WebAssembly.">
+<link rel="canonical" href="https://0magnet.github.io/wasm-stuff/{{.Page.CanonicalPath}}">
+<style>
+body, html {
+margin: 0;
+padding: 0;
+width: 100%;
+height: 100%;
+background-color: black;
+color: white;
+}
+</style>
+<script title="wasm_exec.js">
+{{.Page.WasmExecJs}}
+</script>
+<script>
+if (!WebAssembly.instantiateStreaming) {
+  WebAssembly.instantiateStreaming = async (resp, importObject) => {
+    const source = await (await resp).arrayBuffer();
+    return await WebAssembly.instantiate(source, importObject);
+  };
+}
+const go = new Go();
+let mod, inst;
+
+const wasmBase64 = `{{.Page.WasmBase64}}`;
+const wasmBinary = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0)).buffer;
+
+console.log("[WASM-STUFF] Loading {{.Page.Title}} WASM...");
+WebAssembly.instantiate(wasmBinary, go.importObject).then((result) => {
+  mod = result.module;
+  inst = result.instance;
+  console.log("[WASM-STUFF] {{.Page.Title}} WASM instantiated, starting...");
+  run().then((result) => {
+    console.log("[WASM-STUFF] {{.Page.Title}} WASM finished: ", result)
+  }, (failure) => {
+    console.error("[WASM-STUFF] {{.Page.Title}} WASM failed: ", failure)
+  })
+});
+async function run() {
+  await go.run(inst);
+  inst = await WebAssembly.instantiate(mod, go.importObject);
+}
+</script>
+</head>
+<body style="margin: 0; padding: 0; width: 100%; height: 100%; background-color: black; color: white;">
+<a href="{{.Page.OtherLink}}" style="position:fixed;top:10px;right:10px;z-index:10;color:#555;font-family:monospace;font-size:13px;text-decoration:none;">{{.Page.OtherLabel}}</a>
+<div id='gocanvas-container' style="position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 3;">
+<canvas id='gocanvas' style="max-width: 100%; max-height: 100%; z-index: 3;"></canvas></div>
+</body>
+</html>
