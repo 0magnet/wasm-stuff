@@ -13,10 +13,14 @@ import (
 // ── Attractor state ──────────────────────────────────────────────────────────
 
 var (
-	x, y, z float32 = 0.1, 0.5, -0.6
-	steps   int     = 20000
-	vertBuf = make([]float32, 20000*3) // pre-allocated vertex buffer for attractors
+	x, y, z   float32 = 0.1, 0.5, -0.6
+	steps     int     = 20000
+	vertBuf           = make([]float32, 20000*3) // pre-allocated vertex buffer for attractors
+	speedMult float32 = 1.0
 )
+
+// attractorDrawMode is the GL draw mode (LineStrip or Points) — set after glTypes.New.
+var attractorDrawMode js.Value
 
 // Persistent JS typed arrays — allocated once, reused every frame to avoid GC pressure.
 var (
@@ -42,6 +46,20 @@ var (
 	baseColor = [3]float32{1.0, 0.0, 0.0}
 	topColor  = [3]float32{0.0, 0.0, 1.0}
 	midColor  = [3]float32{0.0, 1.0, 0.0}
+	bgColor   = [3]float32{0.0, 0.0, 0.0}
+)
+
+// ── Interaction state ────────────────────────────────────────────────────────
+
+var (
+	autoRotate      bool    = true
+	autoRotateSpeed float32 = 0.005
+	usePoints       bool    = false
+	dragging        bool    = false
+	dragLastX       float32
+	dragLastY       float32
+	dragRotX        float32
+	dragRotY        float32
 )
 
 // ── Selection ────────────────────────────────────────────────────────────────
@@ -141,6 +159,38 @@ var attractorParams = map[string][]paramDef{
 		{"lissajou-b", "b", &lissajouB, 4, 1, 30, 0.1},
 		{"lissajou-c", "c", &lissajouC, 25, 1, 50, 0.1},
 	},
+	"thomas": {
+		{"thomas-dt", "dt", &thomasDT, 0.05, 0.001, 0.1, 0.001},
+		{"thomas-b", "b", &thomasB, 0.208186, 0.01, 1.0, 0.001},
+	},
+	"halvorsen": {
+		{"halvorsen-dt", "dt", &halvorsenDT, 0.005, 0.001, 0.05, 0.001},
+		{"halvorsen-a", "a", &halvorsenA, 1.89, 0.1, 5, 0.01},
+	},
+	"chen": {
+		{"chen-dt", "dt", &chenDT, 0.002, 0.0005, 0.01, 0.0005},
+		{"chen-a", "a", &chenA, 5.0, 0.1, 15, 0.1},
+		{"chen-b", "b", &chenB, -10.0, -20, 0, 0.1},
+		{"chen-c", "c", &chenC, -0.38, -2, 0, 0.01},
+	},
+	"dadras": {
+		{"dadras-dt", "dt", &dadrasDT, 0.005, 0.001, 0.05, 0.001},
+		{"dadras-p", "p", &dadrasP, 3.0, 0.1, 10, 0.1},
+		{"dadras-q", "q", &dadrasQ, 2.7, 0.1, 10, 0.1},
+		{"dadras-r", "r", &dadrasR, 1.7, 0.1, 10, 0.1},
+		{"dadras-s", "s", &dadrasS, 2.0, 0.1, 10, 0.1},
+		{"dadras-e", "e", &dadrasE, 9.0, 0.1, 20, 0.1},
+	},
+	"rabinovich": {
+		{"rab-dt", "dt", &rabDT, 0.001, 0.0001, 0.01, 0.0001},
+		{"rab-alpha", "α", &rabAlpha, 0.14, 0.01, 1, 0.01},
+		{"rab-gamma", "γ", &rabGamma, 0.10, 0.01, 1, 0.01},
+	},
+	"burkeshaw": {
+		{"burke-dt", "dt", &burkeDT, 0.005, 0.001, 0.05, 0.001},
+		{"burke-s", "S", &burkeS, 10.0, 1, 20, 0.1},
+		{"burke-v", "V", &burkeV, 4.272, 1, 10, 0.001},
+	},
 	"sphere": {
 		{"sphere-r", "radius", &sphereRadius, 1.0, 0.1, 5, 0.1},
 	},
@@ -156,20 +206,28 @@ const controlsHTML = `
 <style>
 .rst{background:none;border:none;color:#666;cursor:pointer;font-size:13px;padding:0 2px;font-family:monospace;}
 .rst:hover{color:#fff;}
+.ctrl-btn{background:#333;color:#ccc;border:1px solid #555;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:12px;margin-left:4px;}
+.ctrl-btn:hover{background:#555;}
 </style>
-<div style="margin-bottom:6px;">
+<div style="margin-bottom:6px;line-height:1.8;">
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="rossler" checked> Rossler</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="lorenz"> Lorenz</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="chua"> Chua</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="aizawa"> Aizawa</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="sprott"> Sprott</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="lissajou"> Lissajou</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="thomas"> Thomas</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="halvorsen"> Halvorsen</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="chen"> Chen</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="dadras"> Dadras</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="rabinovich"> Rabinovich-Fabrikant</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="burkeshaw"> Burke-Shaw</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="cube"> Cube</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="nestedcube"> Nested Cube</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="sphere"> Sphere</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="torus"> Torus</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="magnetosphere"> Magnetosphere</label>
-  <button id="reset-all-btn" style="margin-left:8px;background:#333;color:#ccc;border:1px solid #555;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:12px;">Reset All</button>
+  <button id="reset-all-btn" class="ctrl-btn">Reset All</button>
 </div>
 <div id="params" style="margin-bottom:6px;"></div>
 <div style="margin-bottom:4px;">
@@ -179,6 +237,8 @@ const controlsHTML = `
   <button class="rst" id="rst-color-mid" title="Reset">↺</button>
   <label style="margin-left:4px;">Top <input type="color" id="color-top" value="#0000ff"></label>
   <button class="rst" id="rst-color-top" title="Reset">↺</button>
+  <label style="margin-left:8px;">BG <input type="color" id="color-bg" value="#000000"></label>
+  <button class="rst" id="rst-color-bg" title="Reset">↺</button>
   <span style="margin-left:8px;">
   <label>Zoom</label>
   <input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:120px;vertical-align:middle;">
@@ -198,17 +258,31 @@ const controlsHTML = `
   <button class="rst" id="rst-rz" title="Reset">↺</button>
   </span>
 </div>
+<div style="margin-bottom:4px;">
+  <label>Speed <input type="range" id="speed-slider" min="0.1" max="5" value="1" step="0.1" style="width:80px;vertical-align:middle;"></label>
+  <output id="slider-value-speed" style="width:24px;display:inline-block;">1</output>
+  <button class="rst" id="rst-speed" title="Reset">↺</button>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
+  <label style="margin-left:8px;">Trail <input type="range" id="trail-slider" min="1000" max="50000" value="20000" step="1000" style="width:80px;vertical-align:middle;"></label>
+  <output id="slider-value-trail" style="width:40px;display:inline-block;">20000</output>
+  <button class="rst" id="rst-trail" title="Reset">↺</button>
+  <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
+  <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
+</div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
 
 // ── init ─────────────────────────────────────────────────────────────────────
 
 func init() {
-	gl = canvasEl.Call("getContext", "webgl")
+	opts := js.Global().Get("Object").New()
+	opts.Set("preserveDrawingBuffer", true)
+	gl = canvasEl.Call("getContext", "webgl", opts)
 	canvasEl.Set("width", width)
 	canvasEl.Set("height", height)
 	if gl.IsUndefined() {
-		gl = canvasEl.Call("getContext", "experimental-webgl")
+		gl = canvasEl.Call("getContext", "experimental-webgl", opts)
 	}
 	if gl.IsUndefined() {
 		js.Global().Call("alert", "browser might not support webgl")
@@ -312,8 +386,206 @@ func main() {
 	// Event: reset all button
 	doc.Call("getElementById", "reset-all-btn").Call("addEventListener", "click", js.FuncOf(onResetAll))
 
-	// Initial mode
+	// Event: speed slider
+	doc.Call("getElementById", "speed-slider").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		val, err := strconv.ParseFloat(doc.Call("getElementById", "speed-slider").Get("value").String(), 32)
+		if err == nil {
+			speedMult = float32(val)
+			doc.Call("getElementById", "slider-value-speed").Set("textContent", strconv.FormatFloat(val, 'f', 1, 64))
+		}
+		return nil
+	}))
+	doc.Call("getElementById", "rst-speed").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		speedMult = 1.0
+		doc.Call("getElementById", "speed-slider").Set("value", "1")
+		doc.Call("getElementById", "slider-value-speed").Set("textContent", "1.0")
+		return nil
+	}))
+
+	// Event: auto-rotate checkbox
+	doc.Call("getElementById", "auto-rotate").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		autoRotate = doc.Call("getElementById", "auto-rotate").Get("checked").Bool()
+		return nil
+	}))
+
+	// Event: points/line toggle
+	doc.Call("getElementById", "use-points").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		usePoints = doc.Call("getElementById", "use-points").Get("checked").Bool()
+		if usePoints {
+			attractorDrawMode = glTypes.Points
+		} else {
+			attractorDrawMode = glTypes.LineStrip
+		}
+		return nil
+	}))
+
+	// Event: trail length slider
+	doc.Call("getElementById", "trail-slider").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		val, err := strconv.ParseFloat(doc.Call("getElementById", "trail-slider").Get("value").String(), 64)
+		if err == nil {
+			newSteps := int(val)
+			if newSteps != steps {
+				steps = newSteps
+				vertBuf = make([]float32, steps*3)
+				jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 3 * 4)
+				buf := jsVertUint8.Get("buffer")
+				jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*3)
+				x, y, z = 0.1, 0.5, -0.6
+				refreshGradient()
+			}
+			doc.Call("getElementById", "slider-value-trail").Set("textContent", strconv.FormatFloat(val, 'f', 0, 64))
+		}
+		return nil
+	}))
+	doc.Call("getElementById", "rst-trail").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		steps = 20000
+		vertBuf = make([]float32, steps*3)
+		jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 3 * 4)
+		buf := jsVertUint8.Get("buffer")
+		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*3)
+		doc.Call("getElementById", "trail-slider").Set("value", "20000")
+		doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
+		x, y, z = 0.1, 0.5, -0.6
+		refreshGradient()
+		return nil
+	}))
+
+	// Event: background color picker
+	doc.Call("getElementById", "color-bg").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		hex := doc.Call("getElementById", "color-bg").Get("value").String()
+		bgColor[0], bgColor[1], bgColor[2] = hexToRGB(hex)
+		gl.Call("clearColor", bgColor[0], bgColor[1], bgColor[2], 1.0)
+		return nil
+	}))
+	doc.Call("getElementById", "rst-color-bg").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		bgColor = [3]float32{0, 0, 0}
+		doc.Call("getElementById", "color-bg").Set("value", "#000000")
+		gl.Call("clearColor", 0, 0, 0, 1.0)
+		return nil
+	}))
+
+	// Event: fullscreen button
+	doc.Call("getElementById", "fullscreen-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		docEl := doc.Get("documentElement")
+		if !docEl.IsUndefined() {
+			rfs := docEl.Get("requestFullscreen")
+			if !rfs.IsUndefined() {
+				docEl.Call("requestFullscreen")
+			} else {
+				wkRfs := docEl.Get("webkitRequestFullscreen")
+				if !wkRfs.IsUndefined() {
+					docEl.Call("webkitRequestFullscreen")
+				}
+			}
+		}
+		return nil
+	}))
+
+	// Event: screenshot button
+	doc.Call("getElementById", "screenshot-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		dataURL := canvasEl.Call("toDataURL", "image/png")
+		link := doc.Call("createElement", "a")
+		link.Set("download", "attractor.png")
+		link.Set("href", dataURL)
+		link.Call("click")
+		return nil
+	}))
+
+	// Event: mouse drag rotation on canvas
+	canvasEl.Call("addEventListener", "mousedown", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		e := args[0]
+		dragging = true
+		dragLastX = float32(e.Get("clientX").Float())
+		dragLastY = float32(e.Get("clientY").Float())
+		return nil
+	}))
+	js.Global().Call("addEventListener", "mousemove", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if !dragging {
+			return nil
+		}
+		e := args[0]
+		cx := float32(e.Get("clientX").Float())
+		cy := float32(e.Get("clientY").Float())
+		dragRotY += (cx - dragLastX) * 0.005
+		dragRotX += (cy - dragLastY) * 0.005
+		dragLastX = cx
+		dragLastY = cy
+		return nil
+	}))
+	js.Global().Call("addEventListener", "mouseup", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		dragging = false
+		return nil
+	}))
+
+	// Event: touch drag rotation on canvas
+	canvasEl.Call("addEventListener", "touchstart", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		e := args[0]
+		e.Call("preventDefault")
+		t := e.Get("touches").Index(0)
+		dragging = true
+		dragLastX = float32(t.Get("clientX").Float())
+		dragLastY = float32(t.Get("clientY").Float())
+		return nil
+	}))
+	canvasEl.Call("addEventListener", "touchmove", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if !dragging {
+			return nil
+		}
+		e := args[0]
+		e.Call("preventDefault")
+		t := e.Get("touches").Index(0)
+		cx := float32(t.Get("clientX").Float())
+		cy := float32(t.Get("clientY").Float())
+		dragRotY += (cx - dragLastX) * 0.005
+		dragRotX += (cy - dragLastY) * 0.005
+		dragLastX = cx
+		dragLastY = cy
+		return nil
+	}))
+	canvasEl.Call("addEventListener", "touchend", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		dragging = false
+		return nil
+	}))
+
+	// Event: scroll wheel zoom
+	canvasEl.Call("addEventListener", "wheel", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		e := args[0]
+		e.Call("preventDefault")
+		delta := float32(e.Get("deltaY").Float()) * 0.1
+		zoomVal := float32(js.Global().Get("parseFloat").Invoke(cameraControl.Get("value")).Float())
+		zoomVal -= delta
+		if zoomVal < -95 {
+			zoomVal = -95
+		}
+		if zoomVal > 95 {
+			zoomVal = 95
+		}
+		cameraControl.Set("value", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
+		sliderZoom.Set("textContent", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
+		return nil
+	}))
+
+	// Initial mode — read from URL hash if present
 	selectedMode = "rossler"
+	hash := js.Global().Get("location").Get("hash").String()
+	if len(hash) > 1 {
+		hashMode := hash[1:]
+		// Validate it's a known mode
+		if _, ok := attractorParams[hashMode]; ok {
+			selectedMode = hashMode
+		} else {
+			// Check non-parameterized modes
+			switch hashMode {
+			case "cube", "nestedcube", "magnetosphere":
+				selectedMode = hashMode
+			}
+		}
+	}
+	// Check the matching radio button
+	radio := doc.Call("querySelector", `input[name="mode"][value="`+selectedMode+`"]`)
+	if !radio.IsNull() && !radio.IsUndefined() {
+		radio.Set("checked", true)
+	}
 	buildParamPanel(selectedMode)
 
 	// Initialize persistent JS typed arrays for zero-alloc frame uploads
@@ -323,12 +595,14 @@ func main() {
 
 	// Initialize WebGL
 	glTypes.New(gl)
+	attractorDrawMode = glTypes.LineStrip
 	// Bind buffers before setting up attrib pointers in setupShaders
 	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
 	gl.Call("bindBuffer", glTypes.ElementArrayBuffer, attractorIndexBuffer)
 	setupShaders()
 	setupMatrices()
 	generateForMode(selectedMode)
+	autoFitCamera()
 	refreshGradient()
 
 	// Start animation loop
@@ -439,8 +713,11 @@ func onModeChange(this js.Value, args []js.Value) interface{} {
 	selectedMode = doc.Call("querySelector", `input[name="mode"]:checked`).Get("value").String()
 	x, y, z = 0.1, 0.5, -0.6
 	buildParamPanel(selectedMode)
-	// Run one frame to populate vertices, then update gradient
+	// Update URL hash
+	js.Global().Get("location").Set("hash", selectedMode)
+	// Run one frame to populate vertices, then update gradient and fit camera
 	generateForMode(selectedMode)
+	autoFitCamera()
 	refreshGradient()
 	return nil
 }
@@ -486,16 +763,39 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	}
 	buildParamPanel(selectedMode)
 
+	// Reset speed, auto-rotate, draw mode, trail
+	speedMult = 1.0
+	autoRotate = true
+	usePoints = false
+	attractorDrawMode = glTypes.LineStrip
+	dragRotX, dragRotY = 0, 0
+	doc.Call("getElementById", "speed-slider").Set("value", "1")
+	doc.Call("getElementById", "slider-value-speed").Set("textContent", "1.0")
+	doc.Call("getElementById", "auto-rotate").Set("checked", true)
+	doc.Call("getElementById", "use-points").Set("checked", false)
+	if steps != 20000 {
+		steps = 20000
+		vertBuf = make([]float32, steps*3)
+		jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 3 * 4)
+		buf := jsVertUint8.Get("buffer")
+		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*3)
+	}
+	doc.Call("getElementById", "trail-slider").Set("value", "20000")
+	doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
+
 	// Reset colors
 	baseColor = [3]float32{1.0, 0.0, 0.0}
 	midColor = [3]float32{0.0, 1.0, 0.0}
 	topColor = [3]float32{0.0, 0.0, 1.0}
+	bgColor = [3]float32{0, 0, 0}
 	doc.Call("getElementById", "color-base").Set("value", "#ff0000")
 	doc.Call("getElementById", "color-mid").Set("value", "#00ff00")
 	doc.Call("getElementById", "color-top").Set("value", "#0000ff")
+	doc.Call("getElementById", "color-bg").Set("value", "#000000")
 	gl.Call("uniform3f", uBaseColorLoc, baseColor[0], baseColor[1], baseColor[2])
 	gl.Call("uniform3f", uMidColorLoc, midColor[0], midColor[1], midColor[2])
 	gl.Call("uniform3f", uTopColorLoc, topColor[0], topColor[1], topColor[2])
+	gl.Call("clearColor", 0, 0, 0, 1.0)
 
 	// Reset view
 	generateForMode(selectedMode)

@@ -51,6 +51,7 @@ var vertShaderCode = `
 	varying vec3 vPosition;
 	void main(void) {
 		gl_Position = Pmatrix * Vmatrix * Mmatrix * vec4(position, 1.0);
+		gl_PointSize = 2.0;
 		vPosition = position;
 	}
 `
@@ -135,6 +136,35 @@ func updateModelMatrix() {
 	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, typedModelMatrixBuffer)
 }
 
+func autoFitCamera() {
+	if len(attractorVertices) < 3 {
+		return
+	}
+	maxAbs := float32(0)
+	for i := 0; i < len(attractorVertices); i++ {
+		v := attractorVertices[i]
+		if v < 0 {
+			v = -v
+		}
+		if v > maxAbs {
+			maxAbs = v
+		}
+	}
+	// Set camera distance to ~3x the max extent so the whole thing is visible
+	dist := maxAbs * 3.0
+	if dist < 5 {
+		dist = 5
+	}
+	if dist > 300 {
+		dist = 300
+	}
+	initCameraDist = dist
+	defaultCameraDist = dist
+	cameraControl.Set("value", "0")
+	sliderZoom.Set("textContent", "0")
+	updateViewMatrix()
+}
+
 func generateForMode(mode string) {
 	if shadersReady {
 		if mode == "lorenz" {
@@ -156,6 +186,18 @@ func generateForMode(mode string) {
 		generateSprott()
 	case "lissajou":
 		generateLissajou()
+	case "thomas":
+		generateThomas()
+	case "halvorsen":
+		generateHalvorsen()
+	case "chen":
+		generateChen()
+	case "dadras":
+		generateDadras()
+	case "rabinovich":
+		generateRabinovich()
+	case "burkeshaw":
+		generateBurkeShaw()
 	case "cube":
 		generateCube()
 	case "nestedcube":
@@ -211,6 +253,20 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 		rotationZ1 = rotationZ/20 + tdiff*0.00000001
 		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DZ(rotationZ1))
 	}
+
+	// Apply mouse/touch drag rotation
+	if dragRotX != 0 || dragRotY != 0 {
+		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DX(dragRotX))
+		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(dragRotY))
+		dragRotX = 0
+		dragRotY = 0
+	}
+
+	// Auto-rotation
+	if autoRotate {
+		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(autoRotateSpeed))
+	}
+
 	updateModelMatrix()
 
 	js.Global().Call("requestAnimationFrame", renderFrame)

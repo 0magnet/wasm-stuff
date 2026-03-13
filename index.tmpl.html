@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WASM Stuff - {{.Page.Title}} Strange Attractor Visualizer</title>
-<meta name="description" content="Interactive 3D strange attractor visualizer built with {{.Page.Title}} and WebAssembly. Explore Lorenz, Rossler, Chua, Aizawa, Sprott, and Lissajous attractors with real-time WebGL rendering.">
-<meta name="keywords" content="strange attractor, WebAssembly, WASM, WebGL, Lorenz, Rossler, Chua, Aizawa, Sprott, Lissajous, 3D visualization, Go, TinyGo">
+<meta name="description" content="Interactive 3D strange attractor visualizer built with {{.Page.Title}} and WebAssembly. Explore Lorenz, Rossler, Chua, Aizawa, Sprott, Lissajous, Thomas, Halvorsen, Chen, Dadras, Rabinovich-Fabrikant, and Burke-Shaw attractors with real-time WebGL rendering.">
+<meta name="keywords" content="strange attractor, WebAssembly, WASM, WebGL, Lorenz, Rossler, Chua, Aizawa, Sprott, Lissajous, Thomas, Halvorsen, Chen, Dadras, Rabinovich-Fabrikant, Burke-Shaw, 3D visualization, Go, TinyGo, chaos theory">
 <meta name="author" content="0magnet">
 <meta property="og:title" content="WASM Stuff - {{.Page.Title}} Strange Attractor Visualizer">
-<meta property="og:description" content="Interactive 3D strange attractor visualizer built with {{.Page.Title}} and WebAssembly. Explore Lorenz, Rossler, Chua, Aizawa, and more.">
+<meta property="og:description" content="Interactive 3D strange attractor visualizer with 12 attractors, mouse drag rotation, zoom, and real-time WebGL rendering. Built with {{.Page.Title}} and WebAssembly.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="WASM Stuff - {{.Page.Title}} Strange Attractor Visualizer">
@@ -58,8 +58,8 @@ async function run() {
 </script>
 </head>
 <body style="margin: 0; padding: 0; width: 100%; height: 100%; background-color: black; color: white;">
-<a href="{{.Page.OtherLink}}" style="position:fixed;top:10px;right:10px;z-index:10;color:#555;font-family:monospace;font-size:13px;text-decoration:none;">{{.Page.OtherLabel}}</a>
-<div id='gocanvas-container' style="position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 3;">
-<canvas id='gocanvas' style="max-width: 100%; max-height: 100%; z-index: 3;"></canvas></div>
+<a href="{{.Page.OtherLink}}" style="position:fixed;top:10px;right:10px;z-index:20;color:#555;font-family:monospace;font-size:13px;text-decoration:none;">{{.Page.OtherLabel}}</a>
+<div id='gocanvas-container' style="position: absolute; width: 100%; height: 100%; z-index: 3;">
+<canvas id='gocanvas' style="max-width: 100%; max-height: 100%; z-index: 3; touch-action: none;"></canvas></div>
 </body>
 </html>

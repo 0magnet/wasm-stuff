@@ -2,15 +2,15 @@
 
 package main
 
-var sprottDT, sprottA, sprottB float32 = 0.01, 2.07, 1.8
+var halvorsenDT, halvorsenA float32 = 0.005, 1.89
 
-func generateSprott() {
+func generateHalvorsen() {
 	vertices := vertBuf[:steps*3]
 	for i := 0; i < steps; i++ {
-		dt := sprottDT * speedMult
-		x1 := x + dt*(y+sprottA*x*y+x*z)
-		y1 := y + dt*(1-sprottB*x*x+y*z)
-		z1 := z + dt*(x-x*x-y*y)
+		dt := halvorsenDT * speedMult
+		x1 := x + dt*(-halvorsenA*x-4*y-4*z-y*y)
+		y1 := y + dt*(-halvorsenA*y-4*z-4*x-z*z)
+		z1 := z + dt*(-halvorsenA*z-4*x-4*y-x*x)
 		x, y, z = x1, y1, z1
 		vertices[i*3], vertices[i*3+1], vertices[i*3+2] = x, y, z
 	}

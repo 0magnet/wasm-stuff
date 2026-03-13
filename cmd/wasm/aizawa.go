@@ -7,13 +7,12 @@ var aizawaDT, aizawaA, aizawaB, aizawaC, aizawaD, aizawaE, aizawaF float32 = 0.0
 func generateAizawa() {
 	vertices := vertBuf[:steps*3]
 	for i := 0; i < steps; i++ {
-		x1 := x + aizawaDT*((z-aizawaB)*x-aizawaD*y)
-		y1 := y + aizawaDT*(aizawaD*x+(z-aizawaB)*y)
-		z1 := z + aizawaDT*(aizawaC+aizawaA*z-(z*z*z)/3-(x*x+y*y)*(1+aizawaE*z)+aizawaF*z*x*x*x)
+		dt := aizawaDT * speedMult
+		x1 := x + dt*((z-aizawaB)*x-aizawaD*y)
+		y1 := y + dt*(aizawaD*x+(z-aizawaB)*y)
+		z1 := z + dt*(aizawaC+aizawaA*z-(z*z*z)/3-(x*x+y*y)*(1+aizawaE*z)+aizawaF*z*x*x*x)
 		x, y, z = x1, y1, z1
-		vertices[i*3] = x
-		vertices[i*3+1] = y
-		vertices[i*3+2] = z
+		vertices[i*3], vertices[i*3+1], vertices[i*3+2] = x, y, z
 	}
-	uploadVerticesOnly(vertices, glTypes.LineStrip, len(vertices)/3)
+	uploadVerticesOnly(vertices, attractorDrawMode, len(vertices)/3)
 }
