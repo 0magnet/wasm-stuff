@@ -3,6 +3,9 @@
 package main
 
 import (
+	"fmt"
+	"math"
+	"runtime"
 	"strconv"
 	"syscall/js"
 	"time"
@@ -10,13 +13,25 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+// ── Debug stats ─────────────────────────────────────────────────────────────
+
+var (
+	debugEnabled   bool
+	frameCount     int
+	frameTotalMs   float32
+	frameMinMs     float32 = 999
+	frameMaxMs     float32
+	lastFrameStart float32
+)
+
 // ── Attractor state ──────────────────────────────────────────────────────────
 
 var (
 	x, y, z   float32 = 0.1, 0.5, -0.6
-	steps     int     = 20000
-	vertBuf           = make([]float32, 20000*4) // pre-allocated vertex buffer (stride 4: x,y,z,t)
-	speedMult float32 = 1.0
+	steps      int = 20000
+	vertBuf        = make([]float32, 20000*4) // pre-allocated vertex buffer (stride 4: x,y,z,t)
+	speedSteps int     = 1
+	speedScale float32 = 1.0 // dt multiplier for sub-1 speeds
 	// centerOffset is computed after warmup frames and then held stable
 	centerOffset [3]float32
 	centerReady  bool
@@ -56,6 +71,8 @@ var (
 // ── Interaction state ────────────────────────────────────────────────────────
 
 var (
+	paused          bool    = false
+	pausedCount     int     = 0
 	autoRotate      bool    = true
 	autoRotateSpeed float32 = 0.005
 	usePoints       bool    = false
@@ -148,9 +165,10 @@ var attractorParams = map[string][]paramDef{
 	},
 	"chua": {
 		{"chua-dt", "dt", &chuaDT, 0.005, 0.001, 0.05, 0.001},
-		{"chua-a", "a", &chuaA, 40, 1, 80, 0.1},
-		{"chua-b", "b", &chuaB, 3.0, 0.1, 10, 0.1},
-		{"chua-c", "c", &chuaC, 28.0, 1, 60, 0.1},
+		{"chua-alpha", "α", &chuaAlpha, 15.6, 5, 30, 0.1},
+		{"chua-beta", "β", &chuaBeta, 28.0, 10, 50, 0.1},
+		{"chua-m0", "m0", &chuaM0, -1.143, -2, 0, 0.001},
+		{"chua-m1", "m1", &chuaM1, -0.714, -2, 0, 0.001},
 	},
 	"aizawa": {
 		{"aizawa-dt", "dt", &aizawaDT, 0.0052, 0.001, 0.02, 0.0001},
@@ -164,7 +182,7 @@ var attractorParams = map[string][]paramDef{
 	"sprott": {
 		{"sprott-dt", "dt", &sprottDT, 0.01, 0.001, 0.05, 0.001},
 		{"sprott-a", "a", &sprottA, 2.07, 0.1, 5, 0.01},
-		{"sprott-b", "b", &sprottB, 1.8, 0.1, 5, 0.01},
+		{"sprott-b", "b", &sprottB, 1.79, 0.1, 5, 0.01},
 	},
 	"lissajou": {
 		{"lissajou-a", "a", &lissajouA, 3, 1, 20, 1},
@@ -180,10 +198,10 @@ var attractorParams = map[string][]paramDef{
 		{"halvorsen-a", "a", &halvorsenA, 1.89, 0.1, 5, 0.01},
 	},
 	"chen": {
-		{"chen-dt", "dt", &chenDT, 0.002, 0.0005, 0.01, 0.0005},
-		{"chen-a", "a", &chenA, 5.0, 0.1, 15, 0.1},
-		{"chen-b", "b", &chenB, -10.0, -20, 0, 0.1},
-		{"chen-c", "c", &chenC, -0.38, -2, 0, 0.01},
+		{"chen-dt", "dt", &chenDT, 0.0005, 0.0001, 0.005, 0.0001},
+		{"chen-a", "a", &chenA, 35.0, 10, 50, 0.1},
+		{"chen-b", "b", &chenB, 3.0, 0.1, 10, 0.1},
+		{"chen-c", "c", &chenC, 28.0, 10, 40, 0.1},
 	},
 	"dadras": {
 		{"dadras-dt", "dt", &dadrasDT, 0.005, 0.001, 0.05, 0.001},
@@ -202,6 +220,10 @@ var attractorParams = map[string][]paramDef{
 		{"burke-dt", "dt", &burkeDT, 0.005, 0.001, 0.05, 0.001},
 		{"burke-s", "S", &burkeS, 10.0, 1, 20, 0.1},
 		{"burke-v", "V", &burkeV, 4.272, 1, 10, 0.001},
+	},
+	"globe": {
+		{"globe-lat", "lat", &globeLatF, 18, 4, 90, 1},
+		{"globe-lon", "lon", &globeLonF, 36, 4, 180, 1},
 	},
 	"sphere": {
 		{"sphere-r", "radius", &sphereRadius, 1.0, 0.1, 5, 0.1},
@@ -244,6 +266,7 @@ const controlsHTML = `
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="dodecahedron"> Dodecahedron</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="icosahedron"> Icosahedron</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="nestedcube"> Nested Cube</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="globe"> Globe</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="sphere"> Sphere</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="torus"> Torus</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="magnetosphere"> Magnetosphere</label>
@@ -293,8 +316,8 @@ const controlsHTML = `
   </span>
 </div>
 <div style="margin-bottom:4px;">
-  <label>Speed <input type="range" id="speed-slider" min="0.1" max="5" value="1" step="0.1" style="width:80px;vertical-align:middle;"></label>
-  <output id="slider-value-speed" style="width:24px;display:inline-block;">1</output>
+  <label>Speed <input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;vertical-align:middle;"></label>
+  <output id="slider-value-speed" style="width:40px;display:inline-block;">1</output>
   <button class="rst" id="rst-speed" title="Reset">↺</button>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
@@ -302,6 +325,8 @@ const controlsHTML = `
   <output id="slider-value-trail" style="width:50px;display:inline-block;">20000</output>
   <button class="rst" id="rst-trail" title="Reset">↺</button>
   <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
+  <button id="pause-btn" class="ctrl-btn">Pause</button>
   <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
   <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
@@ -430,17 +455,17 @@ func main() {
 
 	// Event: speed slider
 	doc.Call("getElementById", "speed-slider").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		val, err := strconv.ParseFloat(doc.Call("getElementById", "speed-slider").Get("value").String(), 32)
+		val, err := strconv.ParseFloat(doc.Call("getElementById", "speed-slider").Get("value").String(), 64)
 		if err == nil {
-			speedMult = float32(val)
-			doc.Call("getElementById", "slider-value-speed").Set("textContent", strconv.FormatFloat(val, 'f', 1, 64))
+			applySpeedLog(val)
 		}
 		return nil
 	}))
 	doc.Call("getElementById", "rst-speed").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		speedMult = 1.0
-		doc.Call("getElementById", "speed-slider").Set("value", "1")
-		doc.Call("getElementById", "slider-value-speed").Set("textContent", "1.0")
+		speedSteps = 1
+		speedScale = 1.0
+		doc.Call("getElementById", "speed-slider").Set("value", "0")
+		doc.Call("getElementById", "slider-value-speed").Set("textContent", "1")
 		return nil
 	}))
 
@@ -500,6 +525,32 @@ func main() {
 		return nil
 	}))
 
+	// Create info overlay div
+	infoOverlay := doc.Call("createElement", "div")
+	infoOverlay.Set("id", "info-overlay")
+	infoOverlay.Set("style", "display:none;position:fixed;top:140px;left:20px;right:20px;z-index:15;"+
+		"color:rgba(255,255,255,0.85);font-family:monospace;font-size:14px;line-height:1.6;"+
+		"white-space:pre-wrap;pointer-events:none;text-shadow:0 0 10px #000,0 0 20px #000;"+
+		"max-width:600px;")
+	body.Call("appendChild", infoOverlay)
+
+	// Event: show info checkbox
+	doc.Call("getElementById", "show-info").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		checked := doc.Call("getElementById", "show-info").Get("checked").Bool()
+		overlay := doc.Call("getElementById", "info-overlay")
+		if checked {
+			if desc, ok := attractorDescriptions[selectedMode]; ok {
+				overlay.Set("textContent", desc)
+			} else {
+				overlay.Set("textContent", selectedMode)
+			}
+			overlay.Get("style").Set("display", "block")
+		} else {
+			overlay.Get("style").Set("display", "none")
+		}
+		return nil
+	}))
+
 	// Event: background color picker
 	doc.Call("getElementById", "color-bg").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		hex := doc.Call("getElementById", "color-bg").Get("value").String()
@@ -529,6 +580,18 @@ func main() {
 	}))
 	doc.Call("getElementById", "gradient-reverse").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		gradientReverse = doc.Call("getElementById", "gradient-reverse").Get("checked").Bool()
+		return nil
+	}))
+
+	// Event: pause button
+	doc.Call("getElementById", "pause-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		paused = !paused
+		btn := doc.Call("getElementById", "pause-btn")
+		if paused {
+			btn.Set("textContent", "Play")
+		} else {
+			btn.Set("textContent", "Pause")
+		}
 		return nil
 	}))
 
@@ -644,7 +707,7 @@ func main() {
 		} else {
 			// Check non-parameterized modes
 			switch hashMode {
-			case "tetrahedron", "cube", "octahedron", "dodecahedron", "icosahedron", "nestedcube", "magnetosphere":
+			case "tetrahedron", "cube", "octahedron", "dodecahedron", "icosahedron", "nestedcube", "globe", "magnetosphere":
 				selectedMode = hashMode
 			}
 		}
@@ -673,6 +736,12 @@ func main() {
 	autoFitCamera()
 	refreshGradient()
 
+	// Check if debug mode is enabled via JS global
+	debugVal := js.Global().Get("__WASM_DEBUG__")
+	if !debugVal.IsUndefined() && debugVal.Bool() {
+		debugEnabled = true
+	}
+
 	// Start animation loop
 	done := make(chan struct{})
 	renderFrame = js.FuncOf(renderLoop)
@@ -689,16 +758,115 @@ func main() {
 		}
 	}()
 
+	// Debug stats reporter goroutine
+	if debugEnabled {
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				postDebugStats()
+			}
+		}()
+	}
+
 	<-done
+}
+
+func postDebugStats() {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+
+	avgMs := float32(0)
+	fps := float32(0)
+	if frameCount > 0 {
+		avgMs = frameTotalMs / float32(frameCount)
+		fps = 1000.0 / avgMs
+	}
+
+	payload := fmt.Sprintf(
+		`{"mode":"%s","paused":%t,"fps":%.1f,"frame_avg_ms":%.2f,"frame_min_ms":%.2f,"frame_max_ms":%.2f,"frame_count":%d,"speed_steps":%d,"speed_scale":%.4f,"trail_steps":%d,"heap_alloc_mb":%.2f,"heap_sys_mb":%.2f,"heap_objects":%d,"gc_runs":%d,"goroutines":%d}`,
+		selectedMode, paused, fps, avgMs, frameMinMs, frameMaxMs, frameCount,
+		speedSteps, speedScale, steps,
+		float64(ms.HeapAlloc)/1048576, float64(ms.HeapSys)/1048576,
+		ms.HeapObjects, ms.NumGC, runtime.NumGoroutine(),
+	)
+
+	// Reset frame stats for next interval
+	frameCount = 0
+	frameTotalMs = 0
+	frameMinMs = 999
+	frameMaxMs = 0
+
+	// Post via fetch
+	headers := js.Global().Get("Headers").New()
+	headers.Call("set", "Content-Type", "application/json")
+	opts := js.Global().Get("Object").New()
+	opts.Set("method", "POST")
+	opts.Set("headers", headers)
+	opts.Set("body", payload)
+	js.Global().Call("fetch", "/debug/stats", opts)
 }
 
 // Per-attractor initial conditions — defaults to (0.1, 0.5, -0.6) for most.
 var attractorInitCond = map[string][3]float32{
+	"chua":       {0.1, 0.0, 0.0},
 	"rabinovich": {-1.0, 0.0, 0.5},
 	"burkeshaw":  {0.6, 0.0, 0.0},
-	"chen":       {-0.1, 0.5, -0.6},
+	"chen":       {-3.0, 2.0, 20.0},
+	"sprott":     {0.63, 0.47, -0.54},
 	"thomas":     {1.0, 0.0, 0.0},
-	"halvorsen":  {-1.5, -1.5, -1.5},
+	"halvorsen":  {-1.48, -1.51, 2.04},
+}
+
+var attractorDescriptions = map[string]string{
+	"lorenz": "Lorenz Attractor — Discovered by Edward Lorenz in 1963 while modeling atmospheric convection. " +
+		"The butterfly-shaped trajectory arises from a simplified system of three coupled differential equations. " +
+		"It was one of the first systems shown to exhibit deterministic chaos, where tiny differences in initial conditions lead to vastly different outcomes.\n\n" +
+		"dx/dt = σ(y − x)\ndy/dt = x(ρ − z) − y\ndz/dt = xy − βz",
+	"rossler": "Rössler Attractor — Proposed by Otto Rössler in 1976 as a simpler system that produces chaotic behavior. " +
+		"Unlike the Lorenz system's two-lobed shape, the Rössler attractor has a single folded-band structure with an outward spiral that occasionally makes a large excursion in the z-direction.\n\n" +
+		"dx/dt = −(y + z)\ndy/dt = x + ay\ndz/dt = b + z(x − c)",
+	"chua": "Chua's Circuit (Double Scroll Attractor) — Invented by Leon Chua in 1983, this is the first electronic circuit proven to exhibit chaos. " +
+		"The system features a piecewise-linear nonlinearity (the Chua diode) that creates the characteristic double-scroll pattern. " +
+		"It is also the basis for multi-scroll attractor generalizations.\n\n" +
+		"dx/dt = α(y − x − h(x))\ndy/dt = x − y + z\ndz/dt = −βy\nh(x) = m₁x + ½(m₀ − m₁)(|x+1| − |x−1|)",
+	"aizawa": "Aizawa Attractor — A chaotic system that produces a toroidal structure with a tendril extending from the center. " +
+		"The attractor has a visually striking shape that resembles a sphere with a tail, exhibiting both rotational symmetry and chaotic wandering.\n\n" +
+		"dx/dt = (z − b)x − dy\ndy/dt = dx + (z − b)y\ndz/dt = c + az − z³/3 − (x² + y²)(1 + ez) + fzx³",
+	"sprott": "Sprott Attractor — One of many simple chaotic systems catalogued by Julien Clinton Sprott. " +
+		"These systems were discovered through systematic computer searches for chaotic flows with minimal terms, demonstrating that chaos can arise from remarkably simple equations.\n\n" +
+		"dx/dt = y + Axy + xz\ndy/dt = 1 − Bx² + yz\ndz/dt = x − x² − y²",
+	"lissajou": "Lissajous Curve — Named after Jules Antoine Lissajous (1822–1880), these are parametric curves formed by combining sinusoidal motions along each axis. " +
+		"Not a chaotic system — the curves are periodic and their shape depends on the frequency ratios and phase relationships between the three oscillations.\n\n" +
+		"x(t) = sin(at)\ny(t) = sin(bt)\nz(t) = sin(ct)",
+	"thomas": "Thomas' Cyclically Symmetric Attractor — Introduced by René Thomas, this system has the elegant property of cyclic symmetry: each variable is damped and driven by the sine of the next variable in the cycle. " +
+		"The parameter b controls dissipation; as b decreases the system transitions from stable points through limit cycles to chaos.\n\n" +
+		"dx/dt = −bx + sin(y)\ndy/dt = −by + sin(z)\ndz/dt = −bz + sin(x)",
+	"halvorsen": "Halvorsen Attractor — A chaotic system with three-fold rotational symmetry, producing a distinctive pinwheel-like shape. " +
+		"The attractor consists of three intertwined lobes that spiral around each other, creating a visually complex but structurally symmetric trajectory.\n\n" +
+		"dx/dt = −ax − 4y − 4z − y²\ndy/dt = −ay − 4z − 4x − z²\ndz/dt = −az − 4x − 4y − x²",
+	"chen": "Chen Attractor — Discovered by Guanrong Chen in 1999, this system was found as a dual of the Lorenz system in a specific mathematical sense. " +
+		"It exhibits chaotic behavior with a distinctive two-scroll structure that differs from both the Lorenz and Rössler attractors.\n\n" +
+		"dx/dt = a(y − x)\ndy/dt = (c − a)x − xz + cy\ndz/dt = xy − bz",
+	"dadras": "Dadras Attractor — A three-dimensional autonomous chaotic system with five parameters, introduced by Sara Dadras and Hamid Reza Momeni. " +
+		"The system exhibits rich dynamical behavior including period-doubling routes to chaos.\n\n" +
+		"dx/dt = y − px + qyz\ndy/dt = ry − xz + z\ndz/dt = sxy − ez",
+	"rabinovich": "Rabinovich-Fabrikant Attractor — Derived by Mikhail Rabinovich and Anatoly Fabrikant from physical equations modeling the stochasticity of three interacting waves. " +
+		"The system is known for its complex topology and extreme sensitivity to parameters, producing intricate folded structures.\n\n" +
+		"dx/dt = y(z − 1 + x²) + γx\ndy/dt = x(3z + 1 − x²) + γy\ndz/dt = −2z(α + xy)",
+	"burkeshaw": "Burke-Shaw Attractor — Introduced by Bill Burke and Robert Shaw, this system exhibits chaotic behavior with a distinctive two-winged structure. " +
+		"It arises from the study of nonlinear dynamics and produces complex trajectories confined to a compact region of phase space.\n\n" +
+		"dx/dt = −S(x + y)\ndy/dt = −y − Sxz\ndz/dt = Sxy + V",
+	"tetrahedron":    "Tetrahedron — The simplest Platonic solid, with 4 triangular faces, 6 edges, and 4 vertices. It is its own dual.",
+	"cube":           "Cube (Hexahedron) — A Platonic solid with 6 square faces, 12 edges, and 8 vertices. Its dual is the octahedron.",
+	"octahedron":     "Octahedron — A Platonic solid with 8 triangular faces, 12 edges, and 6 vertices. Its dual is the cube.",
+	"dodecahedron":   "Dodecahedron — A Platonic solid with 12 pentagonal faces, 30 edges, and 20 vertices. Its dual is the icosahedron.",
+	"icosahedron":    "Icosahedron — A Platonic solid with 20 triangular faces, 30 edges, and 12 vertices. Its dual is the dodecahedron.",
+	"nestedcube":     "Nested Cube — A cube within a cube, connected at the vertices, illustrating the relationship between inner and outer geometric structures.",
+	"globe":          "Globe — A wireframe sphere showing lines of latitude and longitude, similar to the graticule on a geographic globe. Latitude lines are horizontal circles parallel to the equator, longitude lines are great circles passing through the poles.",
+	"sphere":         "Sphere — A perfectly round three-dimensional surface where every point is equidistant from the center. Generated as a UV sphere with configurable latitude and longitude subdivisions.",
+	"torus":          "Torus — A doughnut-shaped surface of revolution generated by revolving a circle (radius r) around an axis at distance R from the center of the circle.",
+	"magnetosphere":  "Magnetosphere — A visualization of magnetic field lines surrounding a dipole, similar to Earth's magnetosphere that shields the planet from solar wind.",
 }
 
 func resetAttractorState() {
@@ -709,6 +877,38 @@ func resetAttractorState() {
 	}
 	centerReady = false
 	centerWarmup = 0
+}
+
+// checkDiverged returns true and resets state if the attractor has diverged (NaN or >1e6).
+func checkDiverged() bool {
+	if x != x || y != y || z != z || x > 1e6 || x < -1e6 || y > 1e6 || y < -1e6 || z > 1e6 || z < -1e6 {
+		resetAttractorState()
+		return true
+	}
+	return false
+}
+
+// applySpeedLog converts a log10 slider value into speedSteps and speedScale.
+// Slider range -2..2 maps to effective speed 0.01..100.
+// Values >= 1: sub-step (speedSteps=N, speedScale=1.0).
+// Values < 1: scale dt down (speedSteps=1, speedScale=fraction).
+func applySpeedLog(logVal float64) {
+	speed := math.Pow(10, logVal)
+	if speed >= 1.0 {
+		speedSteps = int(speed + 0.5)
+		speedScale = 1.0
+	} else {
+		speedSteps = 1
+		speedScale = float32(speed)
+	}
+	// Display the effective speed value
+	var label string
+	if speed >= 1.0 {
+		label = strconv.Itoa(speedSteps)
+	} else {
+		label = strconv.FormatFloat(speed, 'f', 2, 64)
+	}
+	doc.Call("getElementById", "slider-value-speed").Set("textContent", label)
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────────────
@@ -861,10 +1061,27 @@ func refreshGradient() {
 	}
 }
 
+func updateInfoOverlay() {
+	overlay := doc.Call("getElementById", "info-overlay")
+	if overlay.IsNull() || overlay.IsUndefined() {
+		return
+	}
+	showInfo := doc.Call("getElementById", "show-info")
+	if showInfo.IsNull() || showInfo.IsUndefined() || !showInfo.Get("checked").Bool() {
+		return
+	}
+	if desc, ok := attractorDescriptions[selectedMode]; ok {
+		overlay.Set("textContent", desc)
+	} else {
+		overlay.Set("textContent", selectedMode)
+	}
+}
+
 func onModeChange(this js.Value, args []js.Value) interface{} {
 	selectedMode = doc.Call("querySelector", `input[name="mode"]:checked`).Get("value").String()
 	resetAttractorState()
 	buildParamPanel(selectedMode)
+	updateInfoOverlay()
 	// Update URL hash
 	js.Global().Get("location").Set("hash", selectedMode)
 	// Run one frame to populate vertices, then update gradient and fit camera
@@ -916,15 +1133,20 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	buildParamPanel(selectedMode)
 
 	// Reset speed, auto-rotate, draw mode, trail
-	speedMult = 1.0
+	paused = false
+	doc.Call("getElementById", "pause-btn").Set("textContent", "Pause")
+	speedSteps = 1
+	speedScale = 1.0
 	autoRotate = true
 	usePoints = false
 	attractorDrawMode = glTypes.LineStrip
 	dragRotX, dragRotY = 0, 0
-	doc.Call("getElementById", "speed-slider").Set("value", "1")
-	doc.Call("getElementById", "slider-value-speed").Set("textContent", "1.0")
+	doc.Call("getElementById", "speed-slider").Set("value", "0")
+	doc.Call("getElementById", "slider-value-speed").Set("textContent", "1")
 	doc.Call("getElementById", "auto-rotate").Set("checked", true)
 	doc.Call("getElementById", "use-points").Set("checked", false)
+	doc.Call("getElementById", "show-info").Set("checked", false)
+	doc.Call("getElementById", "info-overlay").Get("style").Set("display", "none")
 	if steps != 20000 {
 		steps = 20000
 		vertBuf = make([]float32, steps*4)

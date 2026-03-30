@@ -268,6 +268,8 @@ func generateForMode(mode string) {
 		generateIcosahedron()
 	case "nestedcube":
 		generateNestedCube()
+	case "globe":
+		generateGlobe()
 	case "sphere":
 		generateSphere()
 	case "torus":
@@ -285,6 +287,20 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	tmark = now
 	totalelapsed += tdiff
 
+	// Debug frame timing
+	if debugEnabled && lastFrameStart > 0 {
+		frameMs := now - lastFrameStart
+		frameCount++
+		frameTotalMs += frameMs
+		if frameMs < frameMinMs {
+			frameMinMs = frameMs
+		}
+		if frameMs > frameMaxMs {
+			frameMaxMs = frameMs
+		}
+	}
+	lastFrameStart = now
+
 	gl.Call("enable", glTypes.DepthTest)
 	if !persistTrail {
 		gl.Call("clear", glTypes.ColorBufferBit)
@@ -292,6 +308,27 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	} else {
 		// Only clear depth so new draws appear on top, but keep color buffer (old trails)
 		gl.Call("clear", glTypes.DepthBufferBit)
+	}
+
+	if paused {
+		// Redraw existing buffer without regenerating
+		gl.Call("drawArrays", attractorDrawMode, 0, pausedCount)
+		// Still allow camera interaction while paused
+		zoomVal := float32(js.Global().Get("parseFloat").Invoke(cameraControl.Get("value")).Float())
+		newDist := initCameraDist - zoomVal
+		if newDist != defaultCameraDist {
+			defaultCameraDist = newDist
+			updateViewMatrix()
+		}
+		if dragRotX != 0 || dragRotY != 0 {
+			movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DX(dragRotX))
+			movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(dragRotY))
+			dragRotX = 0
+			dragRotY = 0
+			updateModelMatrix()
+		}
+		js.Global().Call("requestAnimationFrame", renderFrame)
+		return nil
 	}
 
 	generateForMode(selectedMode)
@@ -339,6 +376,7 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	}
 
 	updateModelMatrix()
+	pausedCount = steps
 
 	js.Global().Call("requestAnimationFrame", renderFrame)
 	return nil
