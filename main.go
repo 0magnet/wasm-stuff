@@ -4,8 +4,10 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	htmpl "html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -32,7 +34,8 @@ var (
 	//go:embed index.tmpl.html
 	indexHtmpl string
 
-	webPort int
+	webPort   int
+	debugMode bool
 )
 
 func init() {
@@ -41,6 +44,7 @@ func init() {
 		defaultport = 8080
 	}
 	runCmd.Flags().IntVarP(&webPort, "port", "p", defaultport, "port to serve on - env WEBPORT="+os.Getenv("WEBPORT"))
+	runCmd.Flags().BoolVarP(&debugMode, "debug", "d", false, "enable /debug/stats profiling endpoint")
 }
 
 func main() {
@@ -100,6 +104,7 @@ var runCmd = &cobra.Command{
 				OtherLink:     "tinygo/index.html",
 				OtherLabel:    "tinygo",
 				CanonicalPath: "index.html",
+				Debug:         debugMode,
 			})
 		})
 		r1.GET("/index.html", func(c *gin.Context) {
@@ -110,6 +115,7 @@ var runCmd = &cobra.Command{
 				OtherLink:     "tinygo/index.html",
 				OtherLabel:    "tinygo",
 				CanonicalPath: "index.html",
+				Debug:         debugMode,
 			})
 		})
 
@@ -131,6 +137,7 @@ var runCmd = &cobra.Command{
 					OtherLink:     "../index.html",
 					OtherLabel:    "go",
 					CanonicalPath: "tinygo/index.html",
+					Debug:         debugMode,
 				})
 			})
 			r1.GET("/tinygo/index.html", func(c *gin.Context) {
@@ -141,6 +148,7 @@ var runCmd = &cobra.Command{
 					OtherLink:     "../index.html",
 					OtherLabel:    "go",
 					CanonicalPath: "tinygo/index.html",
+					Debug:         debugMode,
 				})
 			})
 			r1.GET("/tinygo/wasm_exec.js", func(c *gin.Context) {
@@ -148,6 +156,34 @@ var runCmd = &cobra.Command{
 			})
 			r1.GET("/tinygo/b-tiny.wasm", func(c *gin.Context) {
 				c.Render(http.StatusOK, render.Data{ContentType: "application/wasm", Data: tinygoWasmData})
+			})
+		}
+
+		// Debug profiling endpoint (only when --debug flag is set)
+		if debugMode {
+			var latestStats json.RawMessage
+			var statsMu sync.RWMutex
+
+			r1.POST("/debug/stats", func(c *gin.Context) {
+				body, err := io.ReadAll(c.Request.Body)
+				if err != nil {
+					c.Status(http.StatusBadRequest)
+					return
+				}
+				statsMu.Lock()
+				latestStats = body
+				statsMu.Unlock()
+				c.Status(http.StatusOK)
+			})
+			r1.GET("/debug/stats", func(c *gin.Context) {
+				statsMu.RLock()
+				data := latestStats
+				statsMu.RUnlock()
+				if data == nil {
+					c.JSON(http.StatusOK, gin.H{"status": "waiting for WASM to report stats..."})
+					return
+				}
+				c.Data(http.StatusOK, "application/json", data)
 			})
 		}
 
@@ -257,4 +293,5 @@ type htmlTemplateData struct {
 	OtherLink     string
 	OtherLabel    string
 	CanonicalPath string
+	Debug         bool
 }

@@ -34,6 +34,7 @@ if (!WebAssembly.instantiateStreaming) {
     return await WebAssembly.instantiate(source, importObject);
   };
 }
+window.__WASM_DEBUG__ = {{.Page.Debug}};
 const go = new Go();
 let mod, inst;
 
