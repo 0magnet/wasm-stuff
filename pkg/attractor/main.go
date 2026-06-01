@@ -121,9 +121,23 @@ func initWebGL() {
 	doc = js.Global().Get("document")
 	body = doc.Get("body")
 	canvasEl = doc.Call("getElementById", "gocanvas")
+	if canvasEl.IsUndefined() || canvasEl.IsNull() {
+		return
+	}
 	width = doc.Get("body").Get("clientWidth").Int()
 	height = doc.Get("body").Get("clientHeight").Int()
-	gl = canvasEl.Call("getContext", "webgl")
+	opts := js.Global().Get("Object").New()
+	opts.Set("preserveDrawingBuffer", true)
+	gl = canvasEl.Call("getContext", "webgl", opts)
+	canvasEl.Set("width", width)
+	canvasEl.Set("height", height)
+	if gl.IsUndefined() {
+		gl = canvasEl.Call("getContext", "experimental-webgl", opts)
+	}
+	if gl.IsUndefined() {
+		js.Global().Call("alert", "browser might not support webgl")
+		return
+	}
 	shaderProgram = gl.Call("createProgram")
 	attractorVertexBuffer = gl.Call("createBuffer")
 	attractorIndexBuffer = gl.Call("createBuffer")
@@ -353,23 +367,6 @@ const controlsHTML = `
 </div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
-
-// ── init ─────────────────────────────────────────────────────────────────────
-
-func init() {
-	opts := js.Global().Get("Object").New()
-	opts.Set("preserveDrawingBuffer", true)
-	gl = canvasEl.Call("getContext", "webgl", opts)
-	canvasEl.Set("width", width)
-	canvasEl.Set("height", height)
-	if gl.IsUndefined() {
-		gl = canvasEl.Call("getContext", "experimental-webgl", opts)
-	}
-	if gl.IsUndefined() {
-		js.Global().Call("alert", "browser might not support webgl")
-		return
-	}
-}
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
