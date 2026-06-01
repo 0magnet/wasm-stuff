@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var burkeDT, burkeS, burkeV float32 = 0.005, 10.0, 4.272
 

@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var verticesCube = []float32{
 	// outer cube (±1)

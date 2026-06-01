@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var halvorsenDT, halvorsenA float32 = 0.005, 1.89
 

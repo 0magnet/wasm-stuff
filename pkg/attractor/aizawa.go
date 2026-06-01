@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var aizawaDT, aizawaA, aizawaB, aizawaC, aizawaD, aizawaE, aizawaF float32 = 0.0052, 0.95, 0.7, 0.6, 3.5, 0.25, 0.1
 

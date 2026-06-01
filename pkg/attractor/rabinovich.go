@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var rabDT, rabAlpha, rabGamma float32 = 0.001, 0.14, 0.10
 

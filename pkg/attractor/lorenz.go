@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var lorenzDT, lorenzS, lorenzR, lorenzB float32 = 0.005, 10.0, 28.0, 2.7
 

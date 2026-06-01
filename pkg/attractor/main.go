@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 import (
 	"fmt"
@@ -352,7 +352,7 @@ func init() {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
-func main() {
+func Run() {
 	if body.IsUndefined() {
 		body = doc.Get("body")
 	}
@@ -788,7 +788,7 @@ func postDebugStats() {
 		selectedMode, paused, fps, avgMs, frameMinMs, frameMaxMs, frameCount,
 		speedSteps, speedScale, steps,
 		float64(ms.HeapAlloc)/1048576, float64(ms.HeapSys)/1048576,
-		ms.HeapObjects, ms.NumGC, runtime.NumGoroutine(),
+		ms.HeapObjects, gcRunsCount(&ms), runtime.NumGoroutine(),
 	)
 
 	// Reset frame stats for next interval

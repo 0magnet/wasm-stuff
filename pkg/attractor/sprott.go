@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var sprottDT, sprottA, sprottB float32 = 0.01, 2.07, 1.79
 

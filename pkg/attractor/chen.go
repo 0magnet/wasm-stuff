@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var chenDT, chenA, chenB, chenC float32 = 0.0005, 35.0, 3.0, 28.0
 

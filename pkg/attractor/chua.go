@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package main
+package attractor
 
 var chuaDT, chuaAlpha, chuaBeta, chuaM0, chuaM1 float32 = 0.005, 15.6, 28.0, -1.143, -0.714
 
