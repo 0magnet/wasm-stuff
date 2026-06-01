@@ -282,6 +282,14 @@ func generateForMode(mode string) {
 }
 
 func renderLoop(this js.Value, args []js.Value) interface{} {
+	// Stop button: clear once, do not reschedule. Loop dies here.
+	if stopped {
+		gl.Call("clearColor", 0, 0, 0, 0)
+		gl.Call("clear", glTypes.ColorBufferBit)
+		gl.Call("clear", glTypes.DepthBufferBit)
+		return nil
+	}
+
 	now := float32(args[0].Float())
 	tdiff := now - tmark
 	tmark = now

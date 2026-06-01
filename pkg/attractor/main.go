@@ -72,6 +72,7 @@ var (
 
 var (
 	paused          bool    = false
+	stopped         bool    = false
 	pausedCount     int     = 0
 	autoRotate      bool    = true
 	autoRotateSpeed float32 = 0.005
@@ -282,7 +283,7 @@ const controlsHTML = `
 .ctrl-btn:hover{background:#555;}
 </style>
 <div style="margin-bottom:6px;line-height:1.8;">
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="rossler" checked> Rossler</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="rossler"> Rossler</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="lorenz"> Lorenz</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="chua"> Chua</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="aizawa"> Aizawa</label>
@@ -300,7 +301,7 @@ const controlsHTML = `
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="dodecahedron"> Dodecahedron</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="icosahedron"> Icosahedron</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="nestedcube"> Nested Cube</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="globe"> Globe</label>
+  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="globe" checked> Globe</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="sphere"> Sphere</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="torus"> Torus</label>
   <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="magnetosphere"> Magnetosphere</label>
@@ -361,7 +362,7 @@ const controlsHTML = `
   <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
   <button id="pause-btn" class="ctrl-btn">Pause</button>
-  <button id="stop-btn" class="ctrl-btn">Stop Rendering</button>
+  <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
   <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
   <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
@@ -387,7 +388,7 @@ func Run() {
 	// Build controls panel
 	panel := doc.Call("createElement", "div")
 	panel.Set("id", "controls-panel")
-	panel.Set("style", "position:fixed;top:0;left:0;right:0;z-index:10;background:rgba(0,0,0,0.85);padding:8px 12px;font-family:monospace;font-size:12px;color:#aaa;border-bottom:1px solid #333;pointer-events:auto;")
+	panel.Set("style", "position:fixed;bottom:0;left:0;right:0;z-index:10;background:rgba(0,0,0,0.85);padding:8px 12px;font-family:monospace;font-size:12px;color:#aaa;border-top:1px solid #333;pointer-events:auto;max-height:50vh;overflow-y:auto;")
 	panel.Set("innerHTML", controlsHTML)
 	body.Call("appendChild", panel)
 
@@ -618,12 +619,18 @@ func Run() {
 		return nil
 	}))
 
-	// Event: stop button — freezes the render loop and tears the
-	// controls panel out of the DOM, leaving the canvas frozen on its
-	// current frame. Matches the legacy stl2 "Stop Rendering" semantics
-	// the magnetosphere.net home page used before this delegation.
+	// Event: stop button — clears the canvas, kills the render loop
+	// (renderLoop short-circuits on `stopped` without rescheduling),
+	// and tears the controls panel + runtime overlay out of the DOM.
+	// One-way: reload to restart. Matches the legacy stl2 "Stop
+	// Rendering" semantics the magnetosphere.net home page had before
+	// this delegation.
 	doc.Call("getElementById", "stop-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		stopped = true
 		paused = true
+		gl.Call("clearColor", 0, 0, 0, 0)
+		gl.Call("clear", glTypes.ColorBufferBit)
+		gl.Call("clear", glTypes.DepthBufferBit)
 		panel := doc.Call("getElementById", "controls-panel")
 		if !panel.IsNull() && !panel.IsUndefined() {
 			parent := panel.Get("parentNode")
@@ -743,7 +750,7 @@ func Run() {
 	}))
 
 	// Initial mode — read from URL hash if present
-	selectedMode = "rossler"
+	selectedMode = "globe"
 	hash := js.Global().Get("location").Get("hash").String()
 	if len(hash) > 1 {
 		hashMode := hash[1:]
