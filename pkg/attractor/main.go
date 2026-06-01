@@ -327,6 +327,7 @@ const controlsHTML = `
   <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
   <button id="pause-btn" class="ctrl-btn">Pause</button>
+  <button id="stop-btn" class="ctrl-btn">Stop Rendering</button>
   <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
   <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
@@ -591,6 +592,29 @@ func Run() {
 			btn.Set("textContent", "Play")
 		} else {
 			btn.Set("textContent", "Pause")
+		}
+		return nil
+	}))
+
+	// Event: stop button — freezes the render loop and tears the
+	// controls panel out of the DOM, leaving the canvas frozen on its
+	// current frame. Matches the legacy stl2 "Stop Rendering" semantics
+	// the magnetosphere.net home page used before this delegation.
+	doc.Call("getElementById", "stop-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		paused = true
+		panel := doc.Call("getElementById", "controls-panel")
+		if !panel.IsNull() && !panel.IsUndefined() {
+			parent := panel.Get("parentNode")
+			if !parent.IsNull() && !parent.IsUndefined() {
+				parent.Call("removeChild", panel)
+			}
+		}
+		runtimeEl := doc.Call("getElementById", "runtime")
+		if !runtimeEl.IsNull() && !runtimeEl.IsUndefined() {
+			parent := runtimeEl.Get("parentNode")
+			if !parent.IsNull() && !parent.IsUndefined() {
+				parent.Call("removeChild", runtimeEl)
+			}
 		}
 		return nil
 	}))
