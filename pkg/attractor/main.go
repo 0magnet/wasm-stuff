@@ -92,22 +92,42 @@ var selectedMode string
 
 // ── WebGL state ──────────────────────────────────────────────────────────────
 
+// These are package-level for convenience (lots of helper functions
+// across the package reach for them), but they MUST NOT be initialized
+// at package-var time. When attractor is imported as a library (e.g.
+// from m2/wasm/stl2), package-var init runs before the host's DOM is
+// ready, so getElementById("gocanvas") returns null and the subsequent
+// canvasEl.Call("getContext", "webgl") panics with
+// "syscall/js: call of Value.Call on null". initWebGL(), called from
+// Run() once the canvas exists, populates them.
 var (
-	doc      js.Value = js.Global().Get("document")
-	body     js.Value = doc.Get("body")
-	canvasEl js.Value = doc.Call("getElementById", "gocanvas")
-	width    int      = doc.Get("body").Get("clientWidth").Int()
-	height   int      = doc.Get("body").Get("clientHeight").Int()
-	gl       js.Value = canvasEl.Call("getContext", "webgl")
+	doc      js.Value
+	body     js.Value
+	canvasEl js.Value
+	width    int
+	height   int
+	gl       js.Value
 
-	shaderProgram         js.Value = gl.Call("createProgram")
-	attractorVertexBuffer js.Value = gl.Call("createBuffer")
-	attractorIndexBuffer  js.Value = gl.Call("createBuffer")
+	shaderProgram         js.Value
+	attractorVertexBuffer js.Value
+	attractorIndexBuffer  js.Value
 	attractorVertices     []float32
 	attractorIndices      []uint16
 
 	glTypes GLTypes
 )
+
+func initWebGL() {
+	doc = js.Global().Get("document")
+	body = doc.Get("body")
+	canvasEl = doc.Call("getElementById", "gocanvas")
+	width = doc.Get("body").Get("clientWidth").Int()
+	height = doc.Get("body").Get("clientHeight").Int()
+	gl = canvasEl.Call("getContext", "webgl")
+	shaderProgram = gl.Call("createProgram")
+	attractorVertexBuffer = gl.Call("createBuffer")
+	attractorIndexBuffer = gl.Call("createBuffer")
+}
 
 // ── DOM element refs ─────────────────────────────────────────────────────────
 
@@ -354,11 +374,16 @@ func init() {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 func Run() {
-	if body.IsUndefined() {
-		body = doc.Get("body")
-	}
-	if body.IsUndefined() {
+	// Lazy WebGL init — see initWebGL doc. Must run after the host
+	// DOM is ready (caller's responsibility); otherwise gocanvas
+	// won't exist yet and canvasEl.Call("getContext", ...) panics.
+	initWebGL()
+	if body.IsUndefined() || body.IsNull() {
 		js.Global().Call("alert", "cannot get html body, exiting")
+		return
+	}
+	if canvasEl.IsUndefined() || canvasEl.IsNull() {
+		js.Global().Call("alert", "cannot find #gocanvas, exiting")
 		return
 	}
 
