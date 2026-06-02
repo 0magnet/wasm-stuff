@@ -319,8 +319,19 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	}
 
 	if paused {
-		// Redraw existing buffer without regenerating
-		gl.Call("drawArrays", attractorDrawMode, 0, pausedCount)
+		// Redraw current geometry without advancing trail / auto-rotate.
+		// Attractors use drawArrays with the line-strip buffer
+		// (pausedCount = last frame's step count). Polyhedra +
+		// geometry primitives use drawElements via generateForMode,
+		// so for those we need to re-emit the geometry — drawArrays
+		// alone would not consult the index buffer and the canvas
+		// goes blank. Both paths skip the integrator step so the
+		// visual snapshot is preserved.
+		if isAttractorMode(selectedMode) {
+			gl.Call("drawArrays", attractorDrawMode, 0, pausedCount)
+		} else {
+			generateForMode(selectedMode)
+		}
 		// Still allow camera interaction while paused
 		zoomVal := float32(js.Global().Get("parseFloat").Invoke(cameraControl.Get("value")).Float())
 		newDist := initCameraDist - zoomVal

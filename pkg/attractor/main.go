@@ -76,6 +76,13 @@ var (
 // buildParamPanel after it rebuilds the panel's children.
 var rebindParamWheel func()
 
+// ExtraNavHTML lets the host page inject a small HTML snippet into
+// the controls panel (typically a link to a fullscreen-only variant
+// of the page). Set BEFORE calling Run(). Empty string = no slot
+// rendered. The snippet is inserted as innerHTML into a span that
+// sits next to the model dropdown — keep it short.
+var ExtraNavHTML string
+
 var (
 	paused          bool    = false
 	stopped         bool    = false
@@ -321,6 +328,7 @@ const controlsHTML = `
     </optgroup>
   </select></label>
   <button id="reset-all-btn" class="ctrl-btn">Reset All</button>
+  <span id="extra-nav" style="margin-left:8px;"></span>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
@@ -676,18 +684,28 @@ func Run() {
 		return nil
 	}))
 
-	// Event: fullscreen button
+	// Event: fullscreen button — toggles. If something is currently
+	// fullscreen, exit it; otherwise request fullscreen on the
+	// document element. Handles the webkit-prefixed variant for
+	// older Safari.
 	doc.Call("getElementById", "fullscreen-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		fsEl := doc.Get("fullscreenElement")
+		wkFsEl := doc.Get("webkitFullscreenElement")
+		inFullscreen := (fsEl.Truthy()) || (wkFsEl.Truthy())
+		if inFullscreen {
+			if !doc.Get("exitFullscreen").IsUndefined() {
+				doc.Call("exitFullscreen")
+			} else if !doc.Get("webkitExitFullscreen").IsUndefined() {
+				doc.Call("webkitExitFullscreen")
+			}
+			return nil
+		}
 		docEl := doc.Get("documentElement")
 		if !docEl.IsUndefined() {
-			rfs := docEl.Get("requestFullscreen")
-			if !rfs.IsUndefined() {
+			if !docEl.Get("requestFullscreen").IsUndefined() {
 				docEl.Call("requestFullscreen")
-			} else {
-				wkRfs := docEl.Get("webkitRequestFullscreen")
-				if !wkRfs.IsUndefined() {
-					docEl.Call("webkitRequestFullscreen")
-				}
+			} else if !docEl.Get("webkitRequestFullscreen").IsUndefined() {
+				docEl.Call("webkitRequestFullscreen")
 			}
 		}
 		return nil
@@ -860,6 +878,14 @@ func Run() {
 
 	// Set initial trail-controls visibility for the starting mode.
 	updateTrailVisibility()
+
+	// Optional host-injected nav snippet (e.g. m2 links to /attractors).
+	if ExtraNavHTML != "" {
+		nav := doc.Call("getElementById", "extra-nav")
+		if nav.Truthy() {
+			nav.Set("innerHTML", ExtraNavHTML)
+		}
+	}
 
 	// Inject a host-page CSS rule killing vertical scroll caused by
 	// the controls panel growing the body height. Targets the actual
