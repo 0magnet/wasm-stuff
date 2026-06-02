@@ -7,6 +7,7 @@ import (
 	"math"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall/js"
 	"time"
 
@@ -860,6 +861,20 @@ func Run() {
 	// Set initial trail-controls visibility for the starting mode.
 	updateTrailVisibility()
 
+	// Inject a host-page CSS rule killing vertical scroll caused by
+	// the controls panel growing the body height. Targets the actual
+	// magnetosphere.net symptom (~1cm of overflow) without breaking
+	// pages that legitimately scroll — Run() is only invoked on the
+	// animation page.
+	noScrollStyle := doc.Call("createElement", "style")
+	noScrollStyle.Set("textContent", "html,body{overflow:hidden!important;margin:0;padding:0;}")
+	doc.Get("head").Call("appendChild", noScrollStyle)
+
+	// Random initial orientation + low-rate rotation so the model
+	// doesn't start in the same pose every load. Must run AFTER the
+	// rotation-controls-x/y/z elements are created and queried.
+	randomizeOrientation()
+
 	// Wheel-on-input: scroll over a range/number input adjusts its
 	// value by `step` instead of scrolling the host page. Fires the
 	// input event so the existing listener pipelines react.
@@ -1299,6 +1314,34 @@ func updateTrailVisibility() {
 	}
 }
 
+// randomizeOrientation gives the model a fresh random starting pose
+// and a small random rotation rate on each of X/Y/Z. Called on Run()
+// startup and from Reset All so the user gets a varied view each
+// time instead of always starting at the identity-matrix pose.
+func randomizeOrientation() {
+	mathJS := js.Global().Get("Math")
+	randSym := func() float32 { return float32(mathJS.Call("random").Float()*2 - 1) }
+
+	movMatrix = mgl32.Ident4()
+	movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DX(randSym() * float32(math.Pi)))
+	movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(randSym() * float32(math.Pi)))
+	movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DZ(randSym() * float32(math.Pi)))
+
+	setSliderVal := func(id string, v float32) {
+		el := doc.Call("getElementById", id)
+		if el.Truthy() {
+			el.Set("value", strconv.FormatFloat(float64(v), 'f', 2, 32))
+			out := doc.Call("getElementById", "slider-value-"+strings.TrimPrefix(id, "rotation-controls-"))
+			if out.Truthy() {
+				out.Set("textContent", strconv.FormatFloat(float64(v), 'f', 2, 32))
+			}
+		}
+	}
+	setSliderVal("rotation-controls-x", randSym()*0.15)
+	setSliderVal("rotation-controls-y", randSym()*0.15)
+	setSliderVal("rotation-controls-z", randSym()*0.15)
+}
+
 func onModeChange(this js.Value, args []js.Value) interface{} {
 	sel := doc.Call("getElementById", "mode-select")
 	if sel.Truthy() {
@@ -1333,22 +1376,16 @@ func onColorChange(this js.Value, args []js.Value) interface{} {
 func onResetAll(this js.Value, args []js.Value) interface{} {
 	// Reset camera
 	defaultCameraDist = initCameraDist
-	rotationX, rotationY, rotationZ = 0, 0, 0
 	rotationX1, rotationY1, rotationZ1 = 0, 0, 0
-	movMatrix = mgl32.Ident4()
 
 	// Reset attractor position
 	resetAttractorState()
 
-	// Reset sliders
+	// Reset zoom slider only — rotation sliders + movMatrix are
+	// re-randomized below so the model never lands on the same view
+	// twice.
 	cameraControl.Set("value", "0")
-	rotationControlsX.Set("value", "0")
-	rotationControlsY.Set("value", "0")
-	rotationControlsZ.Set("value", "0")
 	sliderZoom.Set("textContent", "0.0")
-	sliderX.Set("textContent", "0.0")
-	sliderY.Set("textContent", "0.0")
-	sliderZ.Set("textContent", "0.0")
 
 	// Reset all parameters to defaults
 	for _, params := range attractorParams {
@@ -1403,6 +1440,11 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	gl.Call("uniform3f", uTopColorLoc, topColor[0], topColor[1], topColor[2])
 	// Alpha=0: don't paint over the host page's bg (SVG logo etc).
 	gl.Call("clearColor", 0, 0, 0, 0)
+
+	// Randomized starting pose + low-rate rotation. Replaces the old
+	// identity-matrix reset so each click of Reset All produces a
+	// fresh viewing angle.
+	randomizeOrientation()
 
 	// Reset view
 	generateForMode(selectedMode)
