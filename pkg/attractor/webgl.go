@@ -135,18 +135,28 @@ func uploadVerticesOnly(vertices []float32, drawMode js.Value, count int) {
 
 // uploadBuffersIndexed uploads and draws with drawElements.
 // Uses packed stride-0 (xyz only), disabling the trail attribute.
+//
+// Only does the full upload (bind, attribute setup, bufferData with
+// fresh SliceToTypedArray allocations) when staticGeomDirty is set
+// — i.e. on mode change, param change, or Reset. For all other
+// frames we go straight to drawElements with the still-bound
+// buffers, eliminating the per-frame CPU cost of regenerating the
+// JS typed arrays and pushing identical data to the GPU.
 func uploadBuffersIndexed(vertices []float32, indices []uint16, drawMode js.Value) {
-	attractorVertices = vertices
-	attractorIndices = indices
-	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
-	// Switch to packed xyz stride for indexed geometry
-	gl.Call("vertexAttribPointer", positionLoc, 3, glTypes.Float, false, 0, 0)
-	gl.Call("enableVertexAttribArray", positionLoc)
-	gl.Call("disableVertexAttribArray", aTrailTLoc)
-	gl.Call("vertexAttrib1f", aTrailTLoc, 0.0)
-	gl.Call("bufferData", glTypes.ArrayBuffer, SliceToTypedArray(attractorVertices), glTypes.StaticDraw)
-	gl.Call("bindBuffer", glTypes.ElementArrayBuffer, attractorIndexBuffer)
-	gl.Call("bufferData", glTypes.ElementArrayBuffer, SliceToTypedArray(attractorIndices), glTypes.StaticDraw)
+	if staticGeomDirty {
+		attractorVertices = vertices
+		attractorIndices = indices
+		gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
+		// Switch to packed xyz stride for indexed geometry
+		gl.Call("vertexAttribPointer", positionLoc, 3, glTypes.Float, false, 0, 0)
+		gl.Call("enableVertexAttribArray", positionLoc)
+		gl.Call("disableVertexAttribArray", aTrailTLoc)
+		gl.Call("vertexAttrib1f", aTrailTLoc, 0.0)
+		gl.Call("bufferData", glTypes.ArrayBuffer, SliceToTypedArray(attractorVertices), glTypes.StaticDraw)
+		gl.Call("bindBuffer", glTypes.ElementArrayBuffer, attractorIndexBuffer)
+		gl.Call("bufferData", glTypes.ElementArrayBuffer, SliceToTypedArray(attractorIndices), glTypes.StaticDraw)
+		staticGeomDirty = false
+	}
 	gl.Call("drawElements", drawMode, len(attractorIndices), glTypes.UnsignedShort, 0)
 }
 

@@ -3,7 +3,6 @@
 package attractor
 
 import (
-	"strconv"
 	"syscall/js"
 	"unsafe"
 
@@ -332,8 +331,9 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 		} else {
 			generateForMode(selectedMode)
 		}
-		// Still allow camera interaction while paused
-		zoomVal := float32(js.Global().Get("parseFloat").Invoke(cameraControl.Get("value")).Float())
+		// Still allow camera interaction while paused (zoom read
+		// from the Go-side cache instead of parseFloat per frame).
+		zoomVal := cachedZoom
 		newDist := initCameraDist - zoomVal
 		if newDist != defaultCameraDist {
 			defaultCameraDist = newDist
@@ -352,15 +352,13 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 
 	generateForMode(selectedMode)
 
-	// Read slider values
-	zoomVal := float32(js.Global().Get("parseFloat").Invoke(cameraControl.Get("value")).Float())
-	rotationX = float32(js.Global().Get("parseFloat").Invoke(rotationControlsX.Get("value")).Float())
-	rotationY = float32(js.Global().Get("parseFloat").Invoke(rotationControlsY.Get("value")).Float())
-	rotationZ = float32(js.Global().Get("parseFloat").Invoke(rotationControlsZ.Get("value")).Float())
-	sliderZoom.Set("textContent", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
-	sliderX.Set("textContent", strconv.FormatFloat(float64(rotationX), 'f', 1, 64))
-	sliderY.Set("textContent", strconv.FormatFloat(float64(rotationY), 'f', 1, 64))
-	sliderZ.Set("textContent", strconv.FormatFloat(float64(rotationZ), 'f', 1, 64))
+	// Slider values come from cachedZoom/RotX/Y/Z, kept in sync by
+	// input listeners in Run(). Eliminates 4 parseFloat round-trips
+	// + 4 textContent writes per frame.
+	zoomVal := cachedZoom
+	rotationX = cachedRotX
+	rotationY = cachedRotY
+	rotationZ = cachedRotZ
 
 	// Zoom slider directly controls camera distance (absolute position)
 	newDist := initCameraDist - zoomVal

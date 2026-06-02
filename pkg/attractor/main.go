@@ -76,6 +76,25 @@ var (
 // buildParamPanel after it rebuilds the panel's children.
 var rebindParamWheel func()
 
+// Cached slider values. Read once at startup, then refreshed from
+// the DOM only on the slider's input event (which fires on user
+// interaction OR our synthetic dispatch from wheel-on-input). The
+// renderLoop reads these instead of calling parseFloat per frame —
+// saves ~16 JS roundtrips/frame across the 4 fixed sliders.
+var (
+	cachedZoom float32
+	cachedRotX float32
+	cachedRotY float32
+	cachedRotZ float32
+)
+
+// staticGeomDirty is set true when a non-attractor mode's geometry
+// needs re-upload to the GPU (mode change or param change). Cleared
+// inside uploadBuffersIndexed after the first upload. Per-frame
+// calls then skip the SliceToTypedArray + bufferData work and go
+// straight to drawElements with the still-bound buffers.
+var staticGeomDirty = true
+
 // ExtraNavHTML lets the host page inject a small HTML snippet into
 // the controls panel (typically a link to a fullscreen-only variant
 // of the page). Set BEFORE calling Run(). Empty string = no slot
@@ -879,6 +898,31 @@ func Run() {
 	// Set initial trail-controls visibility for the starting mode.
 	updateTrailVisibility()
 
+	// Wire input listeners for the fixed sliders so the cached vars
+	// + visible text output stay in sync with user interaction. The
+	// renderLoop reads cachedZoom/RotX/Y/Z instead of polling
+	// parseFloat per frame.
+	attachSliderInput := func(id string, dec int, outID string, target *float32) {
+		el := doc.Call("getElementById", id)
+		if !el.Truthy() {
+			return
+		}
+		el.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			v, _ := strconv.ParseFloat(el.Get("value").String(), 64)
+			*target = float32(v)
+			out := doc.Call("getElementById", outID)
+			if out.Truthy() {
+				out.Set("textContent", strconv.FormatFloat(v, 'f', dec, 64))
+			}
+			return nil
+		}))
+	}
+	attachSliderInput("camera-zoom", 0, "slider-value-zoom", &cachedZoom)
+	attachSliderInput("rotation-controls-x", 1, "slider-value-x", &cachedRotX)
+	attachSliderInput("rotation-controls-y", 1, "slider-value-y", &cachedRotY)
+	attachSliderInput("rotation-controls-z", 1, "slider-value-z", &cachedRotZ)
+	readSliderCache()
+
 	// Optional host-injected nav snippet (e.g. m2 links to /attractors).
 	if ExtraNavHTML != "" {
 		nav := doc.Call("getElementById", "extra-nav")
@@ -1259,6 +1303,7 @@ func buildParamPanel(mode string) {
 			if err == nil {
 				*p.Value = float32(val)
 				numInput.Set("value", strconv.FormatFloat(val, 'f', dec, 64))
+				staticGeomDirty = true
 				resetAttractorState()
 				refreshGradient()
 			}
@@ -1271,6 +1316,7 @@ func buildParamPanel(mode string) {
 			if err == nil {
 				*p.Value = float32(val)
 				slider.Set("value", strconv.FormatFloat(val, 'g', -1, 64))
+				staticGeomDirty = true
 				resetAttractorState()
 				refreshGradient()
 			}
@@ -1358,9 +1404,17 @@ func updateInfoOverlay() {
 // isAttractorMode reports whether trail-related controls are
 // meaningful for this mode. Polyhedra/geometry render fixed
 // vertex sets and ignore the trail buffer entirely.
+// Explicit list — attractorParams also contains entries for
+// globe/sphere/torus (for their lat/lon/stacks/slices sliders),
+// so a "key exists in attractorParams" check would misclassify
+// those as attractors.
 func isAttractorMode(mode string) bool {
-	_, ok := attractorParams[mode]
-	return ok
+	switch mode {
+	case "rossler", "lorenz", "chua", "aizawa", "sprott", "lissajou",
+		"thomas", "halvorsen", "chen", "dadras", "rabinovich", "burkeshaw":
+		return true
+	}
+	return false
 }
 
 // updateTrailVisibility shows/hides the Trail slider + Persist
@@ -1375,6 +1429,30 @@ func updateTrailVisibility() {
 	} else {
 		el.Get("style").Set("display", "none")
 	}
+}
+
+// readSliderCache pulls the current DOM value of each fixed slider
+// into the cached* vars and updates the visible output text. Called
+// at startup, from input-event listeners, and from any code path
+// (Reset All, randomizeOrientation) that writes slider values via
+// .Set("value", ...) without dispatching a synthetic input event.
+func readSliderCache() {
+	pull := func(id string, dec int, outID string) float32 {
+		el := doc.Call("getElementById", id)
+		if !el.Truthy() {
+			return 0
+		}
+		v, _ := strconv.ParseFloat(el.Get("value").String(), 64)
+		out := doc.Call("getElementById", outID)
+		if out.Truthy() {
+			out.Set("textContent", strconv.FormatFloat(v, 'f', dec, 64))
+		}
+		return float32(v)
+	}
+	cachedZoom = pull("camera-zoom", 0, "slider-value-zoom")
+	cachedRotX = pull("rotation-controls-x", 1, "slider-value-x")
+	cachedRotY = pull("rotation-controls-y", 1, "slider-value-y")
+	cachedRotZ = pull("rotation-controls-z", 1, "slider-value-z")
 }
 
 // randomizeOrientation gives the model a fresh random starting pose
@@ -1403,6 +1481,8 @@ func randomizeOrientation() {
 	setSliderVal("rotation-controls-x", randSym()*0.15)
 	setSliderVal("rotation-controls-y", randSym()*0.15)
 	setSliderVal("rotation-controls-z", randSym()*0.15)
+	// Sync the Go-side cache with the values we just wrote.
+	readSliderCache()
 }
 
 func onModeChange(this js.Value, args []js.Value) interface{} {
@@ -1410,6 +1490,9 @@ func onModeChange(this js.Value, args []js.Value) interface{} {
 	if sel.Truthy() {
 		selectedMode = sel.Get("value").String()
 	}
+	// New mode means fresh geometry — force an upload on the next
+	// uploadBuffersIndexed for static modes.
+	staticGeomDirty = true
 	resetAttractorState()
 	buildParamPanel(selectedMode)
 	updateInfoOverlay()
@@ -1440,6 +1523,9 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	// Reset camera
 	defaultCameraDist = initCameraDist
 	rotationX1, rotationY1, rotationZ1 = 0, 0, 0
+
+	// Static geometry may need re-upload (params reset to defaults).
+	staticGeomDirty = true
 
 	// Reset attractor position
 	resetAttractorState()
