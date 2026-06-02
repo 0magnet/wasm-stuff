@@ -385,12 +385,26 @@ func Run() {
 		return
 	}
 
-	// Build controls panel
+	// Build controls panel. If the host page already has a <footer>
+	// (e.g. m2/magnetosphere.net puts cart + shipping nav there), append
+	// the controls inline into it so the existing footer nav stays
+	// accessible. Otherwise fall back to a fixed-bottom overlay for
+	// standalone use.
 	panel := doc.Call("createElement", "div")
 	panel.Set("id", "controls-panel")
-	panel.Set("style", "position:fixed;bottom:0;left:0;right:0;z-index:10;background:rgba(0,0,0,0.85);padding:8px 12px;font-family:monospace;font-size:12px;color:#aaa;border-top:1px solid #333;pointer-events:auto;max-height:50vh;overflow-y:auto;")
 	panel.Set("innerHTML", controlsHTML)
-	body.Call("appendChild", panel)
+	footers := doc.Call("getElementsByTagName", "footer")
+	var existingFooter js.Value
+	if footers.Get("length").Int() > 0 {
+		existingFooter = footers.Index(0)
+	}
+	if existingFooter.Truthy() {
+		panel.Set("style", "color:#aaa;font-family:monospace;font-size:12px;padding:8px 12px;background:rgba(0,0,0,0.85);border-top:1px solid #333;")
+		existingFooter.Call("appendChild", panel)
+	} else {
+		panel.Set("style", "position:fixed;bottom:0;left:0;right:0;z-index:10;background:rgba(0,0,0,0.85);padding:8px 12px;font-family:monospace;font-size:12px;color:#aaa;border-top:1px solid #333;pointer-events:auto;max-height:50vh;overflow-y:auto;")
+		body.Call("appendChild", panel)
+	}
 
 	// Refresh DOM
 	doc = js.Global().Get("document")
@@ -675,9 +689,32 @@ func Run() {
 		return nil
 	}))
 
-	// Event: mouse drag rotation on canvas
-	canvasEl.Call("addEventListener", "mousedown", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	// isInteractiveDragTarget returns true when the mousedown/touchstart
+	// target is something the user is clicking deliberately (button,
+	// link, form input, the controls panel itself) — in those cases we
+	// must NOT hijack the click to start a drag.
+	isInteractiveDragTarget := func(target js.Value) bool {
+		if !target.Truthy() {
+			return false
+		}
+		if closest := target.Get("closest"); closest.Type() == js.TypeFunction {
+			match := target.Call("closest", "a, button, input, label, select, textarea, #controls-panel, [data-no-drag]")
+			if match.Truthy() {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Event: mouse drag rotation. Bound to document (not canvasEl) so
+	// rotation still works when the host page paints other elements
+	// (e.g. magnetosphere.net's SVG logo) above the canvas. The target
+	// filter above lets clicks on links/buttons/inputs through.
+	doc.Call("addEventListener", "mousedown", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		e := args[0]
+		if isInteractiveDragTarget(e.Get("target")) {
+			return nil
+		}
 		dragging = true
 		dragLastX = float32(e.Get("clientX").Float())
 		dragLastY = float32(e.Get("clientY").Float())
@@ -701,9 +738,15 @@ func Run() {
 		return nil
 	}))
 
-	// Event: touch drag rotation on canvas
-	canvasEl.Call("addEventListener", "touchstart", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	// Event: touch drag rotation. Same doc-binding rationale as mouse.
+	// Do NOT preventDefault here unconditionally — that breaks tap+drag
+	// on host-page links/buttons. Only preventDefault when we're
+	// actually starting a drag (target isn't interactive).
+	doc.Call("addEventListener", "touchstart", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		e := args[0]
+		if isInteractiveDragTarget(e.Get("target")) {
+			return nil
+		}
 		e.Call("preventDefault")
 		t := e.Get("touches").Index(0)
 		dragging = true
@@ -711,7 +754,7 @@ func Run() {
 		dragLastY = float32(t.Get("clientY").Float())
 		return nil
 	}))
-	canvasEl.Call("addEventListener", "touchmove", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	doc.Call("addEventListener", "touchmove", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if !dragging {
 			return nil
 		}
@@ -726,7 +769,7 @@ func Run() {
 		dragLastY = cy
 		return nil
 	}))
-	canvasEl.Call("addEventListener", "touchend", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	doc.Call("addEventListener", "touchend", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		dragging = false
 		return nil
 	}))
