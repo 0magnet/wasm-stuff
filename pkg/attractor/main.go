@@ -82,10 +82,11 @@ var rebindParamWheel func()
 // renderLoop reads these instead of calling parseFloat per frame —
 // saves ~16 JS roundtrips/frame across the 4 fixed sliders.
 var (
-	cachedZoom float32
-	cachedRotX float32
-	cachedRotY float32
-	cachedRotZ float32
+	cachedZoom      float32
+	cachedRotX      float32
+	cachedRotY      float32
+	cachedRotZ      float32
+	cachedLineWidth float32 = 1
 )
 
 // staticGeomDirty is set true when a non-attractor mode's geometry
@@ -407,6 +408,9 @@ const controlsHTML = `
   <label style="margin-left:8px;">Speed <input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;vertical-align:middle;"></label>
   <output id="slider-value-speed" style="width:40px;display:inline-block;">1</output>
   <button class="rst" id="rst-speed" title="Reset">↺</button>
+  <label style="margin-left:8px;">Line <input type="range" id="line-width" min="1" max="10" value="1" step="1" style="width:80px;vertical-align:middle;"></label>
+  <output id="slider-value-line" style="width:20px;display:inline-block;">1</output>
+  <button class="rst" id="rst-line" title="Reset">↺</button>
 </div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
@@ -923,6 +927,46 @@ func Run() {
 	attachSliderInput("rotation-controls-z", 1, "slider-value-z", &cachedRotZ)
 	readSliderCache()
 
+	// Line-width slider. WebGL's gl.lineWidth() is capped at 1.0
+	// on most modern browsers/drivers (Chrome enforces it; many
+	// platforms' ANGLE / Mesa drivers do too) — the call still
+	// runs but visual effect is implementation-dependent. If the
+	// stack honors it, the slider gives thicker line strokes; if
+	// not, this is a harmless no-op for values >1. Wheel-binding
+	// for "line-width" is registered in the bindWheelToInput loop
+	// further down.
+	lineEl := doc.Call("getElementById", "line-width")
+	if lineEl.Truthy() {
+		applyLineWidth := func() {
+			v, _ := strconv.ParseFloat(lineEl.Get("value").String(), 64)
+			if v < 1 {
+				v = 1
+			}
+			cachedLineWidth = float32(v)
+			out := doc.Call("getElementById", "slider-value-line")
+			if out.Truthy() {
+				out.Set("textContent", strconv.FormatFloat(v, 'f', 0, 64))
+			}
+			gl.Call("lineWidth", v)
+		}
+		lineEl.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			applyLineWidth()
+			return nil
+		}))
+		applyLineWidth()
+	}
+	rstLine := doc.Call("getElementById", "rst-line")
+	if rstLine.Truthy() {
+		rstLine.Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			lineEl.Set("value", "1")
+			evtInit := js.Global().Get("Object").New()
+			evtInit.Set("bubbles", true)
+			evt := js.Global().Get("Event").New("input", evtInit)
+			lineEl.Call("dispatchEvent", evt)
+			return nil
+		}))
+	}
+
 	// Optional host-injected nav snippet (e.g. m2 links to /attractors).
 	if ExtraNavHTML != "" {
 		nav := doc.Call("getElementById", "extra-nav")
@@ -987,7 +1031,7 @@ func Run() {
 	}
 	for _, id := range []string{
 		"camera-zoom", "rotation-controls-x", "rotation-controls-y",
-		"rotation-controls-z", "speed-slider", "trail-slider",
+		"rotation-controls-z", "speed-slider", "trail-slider", "line-width",
 	} {
 		bindWheelToInput(id)
 	}
@@ -1555,6 +1599,10 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	dragRotX, dragRotY = 0, 0
 	doc.Call("getElementById", "speed-slider").Set("value", "0")
 	doc.Call("getElementById", "slider-value-speed").Set("textContent", "1")
+	cachedLineWidth = 1
+	doc.Call("getElementById", "line-width").Set("value", "1")
+	doc.Call("getElementById", "slider-value-line").Set("textContent", "1")
+	gl.Call("lineWidth", 1)
 	doc.Call("getElementById", "auto-rotate").Set("checked", true)
 	doc.Call("getElementById", "use-points").Set("checked", false)
 	doc.Call("getElementById", "show-info").Set("checked", false)
