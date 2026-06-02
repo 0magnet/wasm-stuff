@@ -70,6 +70,11 @@ var (
 
 // ── Interaction state ────────────────────────────────────────────────────────
 
+// rebindParamWheel re-wires wheel-on-input listeners to every range/
+// number input inside the params div. Set in Run(); called from
+// buildParamPanel after it rebuilds the panel's children.
+var rebindParamWheel func()
+
 var (
 	paused          bool    = false
 	stopped         bool    = false
@@ -281,31 +286,47 @@ const controlsHTML = `
 .rst:hover{color:#fff;}
 .ctrl-btn{background:#333;color:#ccc;border:1px solid #555;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:12px;margin-left:4px;}
 .ctrl-btn:hover{background:#555;}
+#mode-select{background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:12px;padding:2px 4px;}
 </style>
-<div style="margin-bottom:6px;line-height:1.8;">
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="rossler"> Rossler</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="lorenz"> Lorenz</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="chua"> Chua</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="aizawa"> Aizawa</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="sprott"> Sprott</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="lissajou"> Lissajou</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="thomas"> Thomas</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="halvorsen"> Halvorsen</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="chen"> Chen</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="dadras"> Dadras</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="rabinovich"> Rabinovich-Fabrikant</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="burkeshaw"> Burke-Shaw</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="tetrahedron"> Tetrahedron</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="cube"> Cube</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="octahedron"> Octahedron</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="dodecahedron"> Dodecahedron</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="icosahedron"> Icosahedron</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="nestedcube"> Nested Cube</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="globe" checked> Globe</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="sphere"> Sphere</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="torus"> Torus</label>
-  <label style="margin-right:4px;cursor:pointer;"><input type="radio" name="mode" value="magnetosphere"> Magnetosphere</label>
+<div style="margin-bottom:6px;">
+  <label>Model <select id="mode-select">
+    <optgroup label="Attractors">
+      <option value="rossler">Rossler</option>
+      <option value="lorenz">Lorenz</option>
+      <option value="chua">Chua</option>
+      <option value="aizawa">Aizawa</option>
+      <option value="sprott">Sprott</option>
+      <option value="lissajou">Lissajou</option>
+      <option value="thomas">Thomas</option>
+      <option value="halvorsen">Halvorsen</option>
+      <option value="chen">Chen</option>
+      <option value="dadras">Dadras</option>
+      <option value="rabinovich">Rabinovich-Fabrikant</option>
+      <option value="burkeshaw">Burke-Shaw</option>
+    </optgroup>
+    <optgroup label="Polyhedra">
+      <option value="tetrahedron">Tetrahedron</option>
+      <option value="cube">Cube</option>
+      <option value="octahedron">Octahedron</option>
+      <option value="dodecahedron">Dodecahedron</option>
+      <option value="icosahedron">Icosahedron</option>
+      <option value="nestedcube">Nested Cube</option>
+    </optgroup>
+    <optgroup label="Geometry">
+      <option value="globe" selected>Globe</option>
+      <option value="sphere">Sphere</option>
+      <option value="torus">Torus</option>
+      <option value="magnetosphere">Magnetosphere</option>
+    </optgroup>
+  </select></label>
   <button id="reset-all-btn" class="ctrl-btn">Reset All</button>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
+  <button id="pause-btn" class="ctrl-btn">Pause</button>
+  <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
+  <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
+  <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
 <div id="params" style="margin-bottom:6px;"></div>
 <div style="margin-bottom:4px;">
@@ -330,41 +351,34 @@ const controlsHTML = `
     <option value="x-rainbow">X Rainbow</option>
     <option value="y-rainbow">Y Rainbow</option>
   </select></label>
-  <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="gradient-reverse"> Reverse</label>
-  <span style="margin-left:8px;">
+  <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="gradient-reverse"> Invert</label>
+  <span id="trail-controls" style="margin-left:8px;">
+    <label>Trail <input type="range" id="trail-slider" min="1000" max="500000" value="20000" step="1000" style="width:100px;vertical-align:middle;"></label>
+    <output id="slider-value-trail" style="width:50px;display:inline-block;">20000</output>
+    <button class="rst" id="rst-trail" title="Reset">↺</button>
+    <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
+  </span>
+</div>
+<div style="margin-bottom:4px;">
   <label>Zoom</label>
   <input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:120px;vertical-align:middle;">
   <output id="slider-value-zoom" style="margin-right:2px;width:24px;display:inline-block;">0</output>
   <button class="rst" id="rst-zoom" title="Reset">↺</button>
-  <label style="margin-left:4px;">X</label>
+  <label style="margin-left:8px;">X</label>
   <input type="range" id="rotation-controls-x" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
   <output id="slider-value-x" style="margin-right:2px;width:24px;display:inline-block;">0</output>
   <button class="rst" id="rst-rx" title="Reset">↺</button>
-  <label style="margin-left:4px;">Y</label>
+  <label style="margin-left:8px;">Y</label>
   <input type="range" id="rotation-controls-y" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
   <output id="slider-value-y" style="margin-right:2px;width:24px;display:inline-block;">0</output>
   <button class="rst" id="rst-ry" title="Reset">↺</button>
-  <label style="margin-left:4px;">Z</label>
+  <label style="margin-left:8px;">Z</label>
   <input type="range" id="rotation-controls-z" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
   <output id="slider-value-z" style="margin-right:2px;width:24px;display:inline-block;">0</output>
   <button class="rst" id="rst-rz" title="Reset">↺</button>
-  </span>
-</div>
-<div style="margin-bottom:4px;">
-  <label>Speed <input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;vertical-align:middle;"></label>
+  <label style="margin-left:8px;">Speed <input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;vertical-align:middle;"></label>
   <output id="slider-value-speed" style="width:40px;display:inline-block;">1</output>
   <button class="rst" id="rst-speed" title="Reset">↺</button>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
-  <label style="margin-left:8px;">Trail <input type="range" id="trail-slider" min="1000" max="500000" value="20000" step="1000" style="width:100px;vertical-align:middle;"></label>
-  <output id="slider-value-trail" style="width:50px;display:inline-block;">20000</output>
-  <button class="rst" id="rst-trail" title="Reset">↺</button>
-  <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
-  <button id="pause-btn" class="ctrl-btn">Pause</button>
-  <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
-  <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
-  <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
@@ -422,11 +436,7 @@ func Run() {
 	sliderZ = doc.Call("getElementById", "slider-value-z")
 
 	// Event: mode change
-	radios := doc.Call("querySelectorAll", `input[name="mode"]`)
-	modeCallback := js.FuncOf(onModeChange)
-	for i := 0; i < radios.Length(); i++ {
-		radios.Index(i).Call("addEventListener", "change", modeCallback)
-	}
+	doc.Call("getElementById", "mode-select").Call("addEventListener", "change", js.FuncOf(onModeChange))
 
 	// Event: color pickers
 	colorCallback := js.FuncOf(onColorChange)
@@ -589,17 +599,20 @@ func Run() {
 		return nil
 	}))
 
-	// Event: background color picker
+	// Event: background color picker. Alpha=0 keeps the canvas
+	// transparent so the host page's background (e.g. m2's SVG logo)
+	// shows through — picking a non-black bg here only tints what's
+	// drawn, it doesn't paint over the host.
 	doc.Call("getElementById", "color-bg").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		hex := doc.Call("getElementById", "color-bg").Get("value").String()
 		bgColor[0], bgColor[1], bgColor[2] = hexToRGB(hex)
-		gl.Call("clearColor", bgColor[0], bgColor[1], bgColor[2], 1.0)
+		gl.Call("clearColor", bgColor[0], bgColor[1], bgColor[2], 0)
 		return nil
 	}))
 	doc.Call("getElementById", "rst-color-bg").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		bgColor = [3]float32{0, 0, 0}
 		doc.Call("getElementById", "color-bg").Set("value", "#000000")
-		gl.Call("clearColor", 0, 0, 0, 1.0)
+		gl.Call("clearColor", 0, 0, 0, 0)
 		return nil
 	}))
 
@@ -808,12 +821,13 @@ func Run() {
 			}
 		}
 	}
-	// Check the matching radio button
-	radio := doc.Call("querySelector", `input[name="mode"][value="`+selectedMode+`"]`)
-	if !radio.IsNull() && !radio.IsUndefined() {
-		radio.Set("checked", true)
+	// Select the matching dropdown option
+	sel := doc.Call("getElementById", "mode-select")
+	if !sel.IsNull() && !sel.IsUndefined() {
+		sel.Set("value", selectedMode)
 	}
 	buildParamPanel(selectedMode)
+	updateTrailVisibility()
 
 	// Initialize persistent JS typed arrays for zero-alloc frame uploads
 	jsVertUint8 = js.Global().Get("Uint8Array").New(steps * 4 * 4)
@@ -842,6 +856,93 @@ func Run() {
 	done := make(chan struct{})
 	renderFrame = js.FuncOf(renderLoop)
 	js.Global().Call("requestAnimationFrame", renderFrame)
+
+	// Set initial trail-controls visibility for the starting mode.
+	updateTrailVisibility()
+
+	// Wheel-on-input: scroll over a range/number input adjusts its
+	// value by `step` instead of scrolling the host page. Fires the
+	// input event so the existing listener pipelines react.
+	bindWheelToInput := func(id string) {
+		el := doc.Call("getElementById", id)
+		if !el.Truthy() {
+			return
+		}
+		el.Call("addEventListener", "wheel", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			e := args[0]
+			e.Call("preventDefault")
+			deltaY := e.Get("deltaY").Float()
+			step, _ := strconv.ParseFloat(el.Get("step").String(), 64)
+			if step == 0 {
+				step = 1
+			}
+			cur, _ := strconv.ParseFloat(el.Get("value").String(), 64)
+			if deltaY < 0 {
+				cur += step
+			} else {
+				cur -= step
+			}
+			if minS := el.Get("min").String(); minS != "" {
+				if mn, err := strconv.ParseFloat(minS, 64); err == nil && cur < mn {
+					cur = mn
+				}
+			}
+			if maxS := el.Get("max").String(); maxS != "" {
+				if mx, err := strconv.ParseFloat(maxS, 64); err == nil && cur > mx {
+					cur = mx
+				}
+			}
+			el.Set("value", strconv.FormatFloat(cur, 'f', -1, 64))
+			evtInit := js.Global().Get("Object").New()
+			evtInit.Set("bubbles", true)
+			evt := js.Global().Get("Event").New("input", evtInit)
+			el.Call("dispatchEvent", evt)
+			return nil
+		}))
+	}
+	for _, id := range []string{
+		"camera-zoom", "rotation-controls-x", "rotation-controls-y",
+		"rotation-controls-z", "speed-slider", "trail-slider",
+	} {
+		bindWheelToInput(id)
+	}
+	// Also wheel-bind every numeric input the param panel builds.
+	// Re-invoke after each buildParamPanel so newly-added inputs get
+	// wired too — wrap the existing helper into a package-level
+	// rebinder we can call from buildParamPanel.
+	rebindParamWheel = func() {
+		params := doc.Call("getElementById", "params")
+		if !params.Truthy() {
+			return
+		}
+		inputs := params.Call("querySelectorAll", "input[type=range], input[type=number]")
+		for i := 0; i < inputs.Length(); i++ {
+			el := inputs.Index(i)
+			id := el.Get("id").String()
+			if id != "" {
+				bindWheelToInput(id)
+			}
+		}
+	}
+	rebindParamWheel()
+
+	// Window resize: keep canvas pixel dimensions in sync with the
+	// viewport so the model doesn't get stretched when devtools opens
+	// or closes (or on phone orientation change).
+	js.Global().Call("addEventListener", "resize", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		newW := doc.Get("body").Get("clientWidth").Int()
+		newH := doc.Get("body").Get("clientHeight").Int()
+		if newW <= 0 || newH <= 0 {
+			return nil
+		}
+		width = newW
+		height = newH
+		canvasEl.Set("width", width)
+		canvasEl.Set("height", height)
+		gl.Call("viewport", 0, 0, width, height)
+		setupMatrices()
+		return nil
+	}))
 
 	// Clock goroutine
 	go func() {
@@ -1137,6 +1238,9 @@ func buildParamPanel(mode string) {
 		span.Call("appendChild", stepInput)
 		paramsDiv.Call("appendChild", span)
 	}
+	if rebindParamWheel != nil {
+		rebindParamWheel()
+	}
 }
 
 func hexToRGB(hex string) (float32, float32, float32) {
@@ -1173,11 +1277,37 @@ func updateInfoOverlay() {
 	}
 }
 
+// isAttractorMode reports whether trail-related controls are
+// meaningful for this mode. Polyhedra/geometry render fixed
+// vertex sets and ignore the trail buffer entirely.
+func isAttractorMode(mode string) bool {
+	_, ok := attractorParams[mode]
+	return ok
+}
+
+// updateTrailVisibility shows/hides the Trail slider + Persist
+// checkbox depending on whether the current mode renders a trail.
+func updateTrailVisibility() {
+	el := doc.Call("getElementById", "trail-controls")
+	if !el.Truthy() {
+		return
+	}
+	if isAttractorMode(selectedMode) {
+		el.Get("style").Set("display", "")
+	} else {
+		el.Get("style").Set("display", "none")
+	}
+}
+
 func onModeChange(this js.Value, args []js.Value) interface{} {
-	selectedMode = doc.Call("querySelector", `input[name="mode"]:checked`).Get("value").String()
+	sel := doc.Call("getElementById", "mode-select")
+	if sel.Truthy() {
+		selectedMode = sel.Get("value").String()
+	}
 	resetAttractorState()
 	buildParamPanel(selectedMode)
 	updateInfoOverlay()
+	updateTrailVisibility()
 	// Update URL hash
 	js.Global().Get("location").Set("hash", selectedMode)
 	// Run one frame to populate vertices, then update gradient and fit camera
@@ -1271,7 +1401,8 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	gl.Call("uniform3f", uBaseColorLoc, baseColor[0], baseColor[1], baseColor[2])
 	gl.Call("uniform3f", uMidColorLoc, midColor[0], midColor[1], midColor[2])
 	gl.Call("uniform3f", uTopColorLoc, topColor[0], topColor[1], topColor[2])
-	gl.Call("clearColor", 0, 0, 0, 1.0)
+	// Alpha=0: don't paint over the host page's bg (SVG logo etc).
+	gl.Call("clearColor", 0, 0, 0, 0)
 
 	// Reset view
 	generateForMode(selectedMode)
