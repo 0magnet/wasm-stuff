@@ -62,7 +62,11 @@ func updateGradientRange(vertices []float32) {
 	maxY := float32(-math.MaxFloat32)
 	minZ := float32(math.MaxFloat32)
 	maxZ := float32(-math.MaxFloat32)
-	for i := 0; i < len(vertices); i += 4 {
+	// Stride is 4 floats per vertex (x,y,z,w). Stop on the last
+	// full quad; otherwise vertices[i+1] / [i+2] index past the
+	// slice end when len(vertices) isn't a multiple of 4 (happens
+	// transiently while a buffer is being repopulated).
+	for i := 0; i+3 < len(vertices); i += 4 {
 		if vertices[i] < minX {
 			minX = vertices[i]
 		}

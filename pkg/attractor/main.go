@@ -947,6 +947,43 @@ func Run() {
 	} {
 		bindWheelToInput(id)
 	}
+
+	// Wheel-on-select: hover-scroll over a <select> cycles its
+	// selectedIndex (option groups skipped automatically — they
+	// aren't part of .options). Fires the change event so existing
+	// listeners (mode-select onModeChange, gradient-type handler)
+	// react as if the user clicked.
+	bindWheelToSelect := func(id string) {
+		el := doc.Call("getElementById", id)
+		if !el.Truthy() {
+			return
+		}
+		el.Call("addEventListener", "wheel", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			e := args[0]
+			e.Call("preventDefault")
+			idx := el.Get("selectedIndex").Int()
+			n := el.Get("options").Get("length").Int()
+			if e.Get("deltaY").Float() > 0 {
+				idx++
+			} else {
+				idx--
+			}
+			if idx < 0 {
+				idx = 0
+			}
+			if idx >= n {
+				idx = n - 1
+			}
+			el.Set("selectedIndex", idx)
+			evtInit := js.Global().Get("Object").New()
+			evtInit.Set("bubbles", true)
+			evt := js.Global().Get("Event").New("change", evtInit)
+			el.Call("dispatchEvent", evt)
+			return nil
+		}))
+	}
+	bindWheelToSelect("mode-select")
+	bindWheelToSelect("gradient-type")
 	// Also wheel-bind every numeric input the param panel builds.
 	// Re-invoke after each buildParamPanel so newly-added inputs get
 	// wired too — wrap the existing helper into a package-level
