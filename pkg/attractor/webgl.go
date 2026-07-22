@@ -50,10 +50,13 @@ func (types *GLTypes) New(gl js.Value) {
 	types.DynamicDraw = gl.Get("DYNAMIC_DRAW")
 }
 
-// updateGradientRange scans vertices (stride 4) and sets min/max uniforms for x, y, and z.
+// updateGradientRange scans vertices and sets min/max uniforms for x, y, and z.
+// Stride is gradientStride floats per vertex: 4 for interleaved
+// attractor data (x,y,z,t), 3 for packed indexed geometry (x,y,z).
 // Only called on mode/param change, NOT per frame.
 func updateGradientRange(vertices []float32) {
-	if !shadersReady || len(vertices) < 4 {
+	stride := gradientStride
+	if !shadersReady || len(vertices) < stride {
 		return
 	}
 	minX := float32(math.MaxFloat32)
@@ -62,11 +65,10 @@ func updateGradientRange(vertices []float32) {
 	maxY := float32(-math.MaxFloat32)
 	minZ := float32(math.MaxFloat32)
 	maxZ := float32(-math.MaxFloat32)
-	// Stride is 4 floats per vertex (x,y,z,w). Stop on the last
-	// full quad; otherwise vertices[i+1] / [i+2] index past the
-	// slice end when len(vertices) isn't a multiple of 4 (happens
-	// transiently while a buffer is being repopulated).
-	for i := 0; i+3 < len(vertices); i += 4 {
+	// Stop on the last full vertex; otherwise vertices[i+1] / [i+2]
+	// index past the slice end when len(vertices) isn't a multiple
+	// of stride (happens transiently while a buffer is repopulated).
+	for i := 0; i+2 < len(vertices); i += stride {
 		if vertices[i] < minX {
 			minX = vertices[i]
 		}
@@ -121,6 +123,7 @@ func uploadVerticesOnly(vertices []float32, drawMode js.Value, count int) {
 		}
 	}
 	attractorVertices = vertices
+	gradientStride = 4
 	// Set stride-4 attribute pointers for interleaved data
 	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
 	gl.Call("vertexAttribPointer", positionLoc, 3, glTypes.Float, false, 16, 0)
@@ -146,6 +149,7 @@ func uploadBuffersIndexed(vertices []float32, indices []uint16, drawMode js.Valu
 	if staticGeomDirty {
 		attractorVertices = vertices
 		attractorIndices = indices
+		gradientStride = 3
 		gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
 		// Switch to packed xyz stride for indexed geometry
 		gl.Call("vertexAttribPointer", positionLoc, 3, glTypes.Float, false, 0, 0)

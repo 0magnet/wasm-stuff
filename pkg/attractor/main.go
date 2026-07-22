@@ -148,6 +148,15 @@ var (
 	attractorVertices     []float32
 	attractorIndices      []uint16
 
+	// gradientStride is the number of floats per vertex in
+	// attractorVertices, set by whichever upload path last ran:
+	// 4 for interleaved attractor data (x,y,z,t) via
+	// uploadVerticesOnly, 3 for packed xyz indexed geometry via
+	// uploadBuffersIndexed. updateGradientRange reads it so it scans
+	// the right stride instead of assuming 4 (which would misread the
+	// min/max range for polyhedra and other indexed modes).
+	gradientStride = 4
+
 	glTypes GLTypes
 )
 
