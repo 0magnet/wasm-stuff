@@ -355,6 +355,10 @@ const controlsHTML = `
       <option value="torus">Torus</option>
       <option value="magnetosphere">Magnetosphere</option>
     </optgroup>
+    <optgroup label="Audio">
+      <option value="spectrogram">Spectrogram</option>
+      <option value="xy">XY Scope</option>
+    </optgroup>
   </select></label>
   <button id="reset-all-btn" class="ctrl-btn">Reset All</button>
   <span id="extra-nav" style="margin-left:8px;"></span>
@@ -867,7 +871,8 @@ func Run() {
 		} else {
 			// Check non-parameterized modes
 			switch hashMode {
-			case "tetrahedron", "cube", "octahedron", "dodecahedron", "icosahedron", "nestedcube", "globe", "magnetosphere":
+			case "tetrahedron", "cube", "octahedron", "dodecahedron", "icosahedron", "nestedcube", "globe", "magnetosphere",
+				"spectrogram", "xy":
 				selectedMode = hashMode
 			}
 		}

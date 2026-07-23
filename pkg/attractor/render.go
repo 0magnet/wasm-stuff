@@ -222,6 +222,21 @@ func autoFitCamera() {
 }
 
 func generateForMode(mode string) {
+	// Audio modes render on their own shader program via
+	// renderAudioFrame; skip the attractor pipeline entirely. This
+	// path is still reached via onModeChange / buildParamPanel /
+	// paused-frame redraw, so a plain return is the correct response.
+	if isAudioMode(mode) {
+		return
+	}
+	// Transitioning back into an attractor mode from audio: restore
+	// the attractor useProgram binding NOW rather than waiting for the
+	// next render frame, because our caller (onModeChange) is about to
+	// issue drawArrays / drawElements and would draw with the wrong
+	// shader program bound.
+	if audioModeActive {
+		deactivateAudioMode()
+	}
 	if shadersReady {
 		gl.Call("uniform1i", uGradientModeLoc, gradientMode)
 		if gradientReverse {
@@ -287,6 +302,23 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 		gl.Call("clear", glTypes.ColorBufferBit)
 		gl.Call("clear", glTypes.DepthBufferBit)
 		return nil
+	}
+
+	// Audio modes (spectrogram, xy) render with their own shader
+	// program on the shared #gocanvas. Route them here so we skip the
+	// entire 3D attractor pipeline for the frame. Transition helpers
+	// swap the useProgram binding when moving between attractor and
+	// audio modes so neither pipeline sees the other's state.
+	if isAudioMode(selectedMode) {
+		if !audioModeActive {
+			activateAudioMode()
+		}
+		renderAudioFrame(selectedMode)
+		js.Global().Call("requestAnimationFrame", renderFrame)
+		return nil
+	}
+	if audioModeActive {
+		deactivateAudioMode()
 	}
 
 	now := float32(args[0].Float())
