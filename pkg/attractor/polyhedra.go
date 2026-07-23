@@ -4,14 +4,18 @@ package attractor
 
 import "math"
 
-func generateTetrahedron() {
+func tetrahedronVertices() []float32 {
 	s := float32(1.0)
-	vertices := []float32{
+	return []float32{
 		s, s, s,
 		s, -s, -s,
 		-s, s, -s,
 		-s, -s, s,
 	}
+}
+
+func generateTetrahedron() {
+	vertices := tetrahedronVertices()
 	// 6 edges as vertex pairs for GL_LINES
 	indices := []uint16{
 		0, 1, 0, 2, 0, 3,
@@ -20,15 +24,19 @@ func generateTetrahedron() {
 	uploadBuffersIndexed(vertices, indices, glTypes.Line)
 }
 
-func generateOctahedron() {
-	vertices := []float32{
-		1, 0, 0,  // 0: +x
+func octahedronVertices() []float32 {
+	return []float32{
+		1, 0, 0, // 0: +x
 		-1, 0, 0, // 1: -x
-		0, 1, 0,  // 2: +y
+		0, 1, 0, // 2: +y
 		0, -1, 0, // 3: -y
-		0, 0, 1,  // 4: +z
+		0, 0, 1, // 4: +z
 		0, 0, -1, // 5: -z
 	}
+}
+
+func generateOctahedron() {
+	vertices := octahedronVertices()
 	// 12 edges as vertex pairs for GL_LINES
 	indices := []uint16{
 		0, 2, 0, 3, 0, 4, 0, 5,
@@ -38,10 +46,10 @@ func generateOctahedron() {
 	uploadBuffersIndexed(vertices, indices, glTypes.Line)
 }
 
-func generateDodecahedron() {
+func dodecahedronVertices() []float32 {
 	phi := float32((1 + math.Sqrt(5)) / 2) // golden ratio
 	invPhi := float32(1) / phi
-	vertices := []float32{
+	return []float32{
 		// cube vertices
 		1, 1, 1, 1, 1, -1, 1, -1, 1, 1, -1, -1,
 		-1, 1, 1, -1, 1, -1, -1, -1, 1, -1, -1, -1,
@@ -52,6 +60,10 @@ func generateDodecahedron() {
 		// rectangle vertices on xz plane
 		phi, invPhi, 0, phi, -invPhi, 0, -phi, invPhi, 0, -phi, -invPhi, 0,
 	}
+}
+
+func generateDodecahedron() {
+	vertices := dodecahedronVertices()
 	// Edges of a dodecahedron (30 edges)
 	indices := []uint16{
 		0, 8, 0, 12, 0, 16,
@@ -68,13 +80,17 @@ func generateDodecahedron() {
 	uploadBuffersIndexed(vertices, indices, glTypes.Line)
 }
 
-func generateIcosahedron() {
+func icosahedronVertices() []float32 {
 	phi := float32((1 + math.Sqrt(5)) / 2)
-	vertices := []float32{
+	return []float32{
 		0, 1, phi, 0, 1, -phi, 0, -1, phi, 0, -1, -phi,
 		1, phi, 0, 1, -phi, 0, -1, phi, 0, -1, -phi, 0,
 		phi, 0, 1, phi, 0, -1, -phi, 0, 1, -phi, 0, -1,
 	}
+}
+
+func generateIcosahedron() {
+	vertices := icosahedronVertices()
 	indices := []uint16{
 		0, 2, 0, 4, 0, 6, 0, 8, 0, 10,
 		1, 3, 1, 4, 1, 6, 1, 9, 1, 11,

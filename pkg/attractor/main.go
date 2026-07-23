@@ -361,6 +361,7 @@ const controlsHTML = `
     </optgroup>
   </select></label>
   <button id="reset-all-btn" class="ctrl-btn">Reset All</button>
+  <button id="normalize-btn" class="ctrl-btn">Normalize</button>
   <span id="extra-nav" style="margin-left:8px;"></span>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
@@ -546,6 +547,13 @@ func Run() {
 
 	// Event: reset all button
 	doc.Call("getElementById", "reset-all-btn").Call("addEventListener", "click", js.FuncOf(onResetAll))
+
+	// Event: normalize — reorient the current model to the default
+	// (identity) pose and stop any slider-driven spin.
+	doc.Call("getElementById", "normalize-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		normalizeOrientation()
+		return nil
+	}))
 
 	// Event: speed slider
 	doc.Call("getElementById", "speed-slider").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
@@ -1532,6 +1540,15 @@ func readSliderCache() {
 	cachedRotX = pull("rotation-controls-x", 1, "slider-value-x")
 	cachedRotY = pull("rotation-controls-y", 1, "slider-value-y")
 	cachedRotZ = pull("rotation-controls-z", 1, "slider-value-z")
+}
+
+// normalizeOrientation resets the current model to the default identity
+// pose and zeroes the per-axis spin rates, so it faces the camera head-on.
+// Auto-rotate (if on) still applies afterward.
+func normalizeOrientation() {
+	movMatrix = mgl32.Ident4()
+	zeroRotationSliders()
+	updateModelMatrix()
 }
 
 // randomizeOrientation gives the model a fresh random starting pose
