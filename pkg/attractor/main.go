@@ -887,11 +887,13 @@ func Run() {
 		return nil
 	}))
 
-	// Initial mode — read from URL hash if present
+	// Initial mode — read from URL hash if present. The hash may carry
+	// permalink state after the mode ("#aizawa&p.a=1.19&..."); take only
+	// the leading mode token here (the rest is applied post-setup).
 	selectedMode = "globe"
 	hash := js.Global().Get("location").Get("hash").String()
 	if len(hash) > 1 {
-		hashMode := hash[1:]
+		hashMode := hashModeToken()
 		// Validate it's a known mode
 		if _, ok := attractorParams[hashMode]; ok {
 			selectedMode = hashMode
@@ -939,6 +941,13 @@ func Run() {
 	if !debugVal.IsUndefined() && debugVal.Bool() {
 		debugEnabled = true
 	}
+
+	// Permalink: capture pristine control defaults, restore any state
+	// encoded in the URL hash, then keep the hash in sync with the live
+	// state so the current view is always shareable.
+	capturePermaDefaults()
+	applyStateFromHash()
+	startPermalinkSync()
 
 	// Start animation loop
 	done := make(chan struct{})
@@ -1387,8 +1396,10 @@ func buildParamPanel(mode string) {
 		slider.Set("id", p.ID)
 		slider.Set("min", minStr)
 		slider.Set("max", maxStr)
-		slider.Set("value", strconv.FormatFloat(float64(*p.Value), 'g', -1, 32))
+		// step must be set before value, else the browser snaps value to
+		// the default step-1 grid (e.g. 0.95 -> 1.1) and the thumb is wrong.
 		slider.Set("step", stepStr)
+		slider.Set("value", strconv.FormatFloat(float64(*p.Value), 'g', -1, 32))
 		slider.Set("style", "width:80px;vertical-align:middle;")
 
 		numInput := doc.Call("createElement", "input")
@@ -1655,8 +1666,6 @@ func onModeChange(this js.Value, args []js.Value) interface{} {
 	buildParamPanel(selectedMode)
 	updateInfoOverlay()
 	updateTrailVisibility()
-	// Update URL hash
-	js.Global().Get("location").Set("hash", selectedMode)
 	// Run one frame to populate vertices, then update gradient and fit camera
 	generateForMode(selectedMode)
 	if selectedMode == "spectrogram" {
@@ -1666,6 +1675,7 @@ func onModeChange(this js.Value, args []js.Value) interface{} {
 		autoFitCamera()
 	}
 	refreshGradient()
+	syncPermalinkNow() // reflect the new mode in the URL immediately
 	return nil
 }
 
