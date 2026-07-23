@@ -7,7 +7,6 @@ import (
 	"math"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall/js"
 	"time"
 
@@ -1592,7 +1591,13 @@ func normalizeOrientation() {
 // randomizeOrientation gives the model a fresh random starting pose
 // and a small random rotation rate on each of X/Y/Z. Called on Run()
 // startup and from Reset All so the user gets a varied view each
-// time instead of always starting at the identity-matrix pose.
+// time instead of always starting at the identity-matrix pose. Only the
+// pose is randomized — NOT the X/Y/Z spin-rate sliders. Setting random
+// rates made the model spin perpetually and, because the sliders show one
+// decimal, it was easy to leave a hidden nonzero rate that kept it turning
+// even with auto-rotate off. Spin now comes only from auto-rotate or an
+// explicit slider, so unchecking auto-rotate (with the sliders at 0)
+// fully stops it.
 func randomizeOrientation() {
 	mathJS := js.Global().Get("Math")
 	randSym := func() float32 { return float32(mathJS.Call("random").Float()*2 - 1) }
@@ -1602,21 +1607,8 @@ func randomizeOrientation() {
 	movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(randSym() * float32(math.Pi)))
 	movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DZ(randSym() * float32(math.Pi)))
 
-	setSliderVal := func(id string, v float32) {
-		el := doc.Call("getElementById", id)
-		if el.Truthy() {
-			el.Set("value", strconv.FormatFloat(float64(v), 'f', 2, 32))
-			out := doc.Call("getElementById", "slider-value-"+strings.TrimPrefix(id, "rotation-controls-"))
-			if out.Truthy() {
-				out.Set("textContent", strconv.FormatFloat(float64(v), 'f', 2, 32))
-			}
-		}
-	}
-	setSliderVal("rotation-controls-x", randSym()*0.15)
-	setSliderVal("rotation-controls-y", randSym()*0.15)
-	setSliderVal("rotation-controls-z", randSym()*0.15)
-	// Sync the Go-side cache with the values we just wrote.
-	readSliderCache()
+	// Ensure the spin-rate sliders (and their cache) are zeroed.
+	zeroRotationSliders()
 }
 
 func onModeChange(this js.Value, args []js.Value) interface{} {
