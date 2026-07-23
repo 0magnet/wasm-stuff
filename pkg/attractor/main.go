@@ -321,12 +321,18 @@ const controlsHTML = `
 <style>
 .rst{background:none;border:none;color:#666;cursor:pointer;font-size:13px;padding:0 2px;font-family:monospace;}
 .rst:hover{color:#fff;}
-.ctrl-btn{background:#333;color:#ccc;border:1px solid #555;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:12px;margin-left:4px;}
+.ctrl-btn{background:#333;color:#ccc;border:1px solid #555;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:12px;}
 .ctrl-btn:hover{background:#555;}
-#mode-select{background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:12px;padding:2px 4px;}
+#mode-select,#gradient-type{background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:12px;padding:2px 4px;}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:5px 12px;margin-bottom:5px;}
+.grp{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;color:#aaa;}
+.grp label{color:#aaa;}
+.numin{width:58px;background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:11px;padding:1px 3px;}
+.row input[type=range]{vertical-align:middle;}
+.sep{width:1px;height:16px;background:#444;margin:0 2px;}
 </style>
-<div style="margin-bottom:6px;">
-  <label>Model <select id="mode-select">
+<div class="row">
+  <span class="grp"><label>Model</label><select id="mode-select">
     <optgroup label="Attractors">
       <option value="rossler">Rossler</option>
       <option value="lorenz">Lorenz</option>
@@ -359,32 +365,29 @@ const controlsHTML = `
       <option value="spectrogram">Spectrogram</option>
       <option value="xy">XY Scope</option>
     </optgroup>
-  </select></label>
+  </select></span>
   <button id="reset-all-btn" class="ctrl-btn">Reset All</button>
   <button id="normalize-btn" class="ctrl-btn">Normalize</button>
-  <span id="extra-nav" style="margin-left:8px;"></span>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="spectro-skin"> Spectrogram skin</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="audio-mod"> Audio mod</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
+  <span id="extra-nav"></span>
+  <span class="sep"></span>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="spectro-skin"> Spectrogram skin</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="audio-mod"> Audio mod</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
+  <span class="sep"></span>
   <button id="pause-btn" class="ctrl-btn">Pause</button>
   <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
   <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
   <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
-<div id="params" style="margin-bottom:6px;"></div>
-<div style="margin-bottom:4px;">
-  <label>Base <input type="color" id="color-base" value="#ff0000"></label>
-  <button class="rst" id="rst-color-base" title="Reset">↺</button>
-  <label style="margin-left:4px;">Mid <input type="color" id="color-mid" value="#00ff00"></label>
-  <button class="rst" id="rst-color-mid" title="Reset">↺</button>
-  <label style="margin-left:4px;">Top <input type="color" id="color-top" value="#0000ff"></label>
-  <button class="rst" id="rst-color-top" title="Reset">↺</button>
-  <label style="margin-left:8px;">BG <input type="color" id="color-bg" value="#000000"></label>
-  <button class="rst" id="rst-color-bg" title="Reset">↺</button>
-  <label style="margin-left:8px;">Gradient
-  <select id="gradient-type" style="background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:11px;">
+<div id="params" class="row"></div>
+<div class="row">
+  <span class="grp"><label>Base</label><input type="color" id="color-base" value="#ff0000"><button class="rst" id="rst-color-base" title="Reset">↺</button></span>
+  <span class="grp"><label>Mid</label><input type="color" id="color-mid" value="#00ff00"><button class="rst" id="rst-color-mid" title="Reset">↺</button></span>
+  <span class="grp"><label>Top</label><input type="color" id="color-top" value="#0000ff"><button class="rst" id="rst-color-top" title="Reset">↺</button></span>
+  <span class="grp"><label>BG</label><input type="color" id="color-bg" value="#000000"><button class="rst" id="rst-color-bg" title="Reset">↺</button></span>
+  <span class="grp"><label>Gradient</label><select id="gradient-type">
     <option value="z2">Z Two-color</option>
     <option value="x3">X Three-color</option>
     <option value="y2">Y Two-color</option>
@@ -395,38 +398,18 @@ const controlsHTML = `
     <option value="z-rainbow">Z Rainbow</option>
     <option value="x-rainbow">X Rainbow</option>
     <option value="y-rainbow">Y Rainbow</option>
-  </select></label>
-  <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="gradient-reverse"> Invert</label>
-  <span id="trail-controls" style="margin-left:8px;">
-    <label>Trail <input type="range" id="trail-slider" min="1000" max="500000" value="20000" step="1000" style="width:100px;vertical-align:middle;"></label>
-    <output id="slider-value-trail" style="width:50px;display:inline-block;">20000</output>
-    <button class="rst" id="rst-trail" title="Reset">↺</button>
-    <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
-  </span>
+  </select></span>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="gradient-reverse"> Invert</label>
+  <span id="trail-controls" class="grp"><label>Trail</label><input type="range" id="trail-slider" min="1000" max="500000" value="20000" step="1000" style="width:100px;"><input type="number" id="slider-value-trail" class="numin" min="1000" max="500000" step="1000" value="20000" style="width:66px;"><button class="rst" id="rst-trail" title="Reset">↺</button></span>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
 </div>
-<div style="margin-bottom:4px;">
-  <label>Zoom</label>
-  <input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:120px;vertical-align:middle;">
-  <output id="slider-value-zoom" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-zoom" title="Reset">↺</button>
-  <label style="margin-left:8px;">X</label>
-  <input type="range" id="rotation-controls-x" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
-  <output id="slider-value-x" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-rx" title="Reset">↺</button>
-  <label style="margin-left:8px;">Y</label>
-  <input type="range" id="rotation-controls-y" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
-  <output id="slider-value-y" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-ry" title="Reset">↺</button>
-  <label style="margin-left:8px;">Z</label>
-  <input type="range" id="rotation-controls-z" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
-  <output id="slider-value-z" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-rz" title="Reset">↺</button>
-  <label style="margin-left:8px;">Speed <input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;vertical-align:middle;"></label>
-  <output id="slider-value-speed" style="width:40px;display:inline-block;">1</output>
-  <button class="rst" id="rst-speed" title="Reset">↺</button>
-  <label style="margin-left:8px;">Line <input type="range" id="line-width" min="1" max="10" value="1" step="1" style="width:80px;vertical-align:middle;"></label>
-  <output id="slider-value-line" style="width:20px;display:inline-block;">1</output>
-  <button class="rst" id="rst-line" title="Reset">↺</button>
+<div class="row">
+  <span class="grp"><label>Zoom</label><input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:110px;"><input type="number" id="slider-value-zoom" class="numin" min="-95" max="95" step="1" value="0"><button class="rst" id="rst-zoom" title="Reset">↺</button></span>
+  <span class="grp"><label>X</label><input type="range" id="rotation-controls-x" min="-1" max="1" value="0" step="0.1" style="width:80px;"><input type="number" id="slider-value-x" class="numin" min="-1" max="1" step="0.1" value="0"><button class="rst" id="rst-rx" title="Reset">↺</button></span>
+  <span class="grp"><label>Y</label><input type="range" id="rotation-controls-y" min="-1" max="1" value="0" step="0.1" style="width:80px;"><input type="number" id="slider-value-y" class="numin" min="-1" max="1" step="0.1" value="0"><button class="rst" id="rst-ry" title="Reset">↺</button></span>
+  <span class="grp"><label>Z</label><input type="range" id="rotation-controls-z" min="-1" max="1" value="0" step="0.1" style="width:80px;"><input type="number" id="slider-value-z" class="numin" min="-1" max="1" step="0.1" value="0"><button class="rst" id="rst-rz" title="Reset">↺</button></span>
+  <span class="grp"><label>Speed</label><input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;"><input type="number" id="slider-value-speed" class="numin" min="0.01" max="100" step="0.01" value="1"><button class="rst" id="rst-speed" title="Reset">↺</button></span>
+  <span class="grp"><label>Line</label><input type="range" id="line-width" min="1" max="10" value="1" step="1" style="width:80px;"><input type="number" id="slider-value-line" class="numin" min="1" max="10" step="1" value="1"><button class="rst" id="rst-line" title="Reset">↺</button></span>
 </div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
@@ -516,7 +499,7 @@ func Run() {
 	doc.Call("getElementById", "rst-zoom").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		defaultCameraDist = initCameraDist
 		cameraControl.Set("value", "0")
-		sliderZoom.Set("textContent", "0")
+		sliderZoom.Set("value", "0")
 		updateViewMatrix()
 		return nil
 	}))
@@ -527,21 +510,21 @@ func Run() {
 	doc.Call("getElementById", "rst-rx").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationX, rotationX1 = 0, 0
 		rotationControlsX.Set("value", "0")
-		sliderX.Set("textContent", "0.0")
+		sliderX.Set("value", "0.0")
 		stopAutoRotate()
 		return nil
 	}))
 	doc.Call("getElementById", "rst-ry").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationY, rotationY1 = 0, 0
 		rotationControlsY.Set("value", "0")
-		sliderY.Set("textContent", "0.0")
+		sliderY.Set("value", "0.0")
 		stopAutoRotate()
 		return nil
 	}))
 	doc.Call("getElementById", "rst-rz").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationZ, rotationZ1 = 0, 0
 		rotationControlsZ.Set("value", "0")
-		sliderZ.Set("textContent", "0.0")
+		sliderZ.Set("value", "0.0")
 		stopAutoRotate()
 		return nil
 	}))
@@ -568,7 +551,7 @@ func Run() {
 		speedSteps = 1
 		speedScale = 1.0
 		doc.Call("getElementById", "speed-slider").Set("value", "0")
-		doc.Call("getElementById", "slider-value-speed").Set("textContent", "1")
+		doc.Call("getElementById", "slider-value-speed").Set("value", "1")
 		return nil
 	}))
 
@@ -620,7 +603,7 @@ func Run() {
 				resetAttractorState()
 				refreshGradient()
 			}
-			doc.Call("getElementById", "slider-value-trail").Set("textContent", strconv.FormatFloat(val, 'f', 0, 64))
+			doc.Call("getElementById", "slider-value-trail").Set("value", strconv.FormatFloat(val, 'f', 0, 64))
 		}
 		return nil
 	}))
@@ -631,7 +614,7 @@ func Run() {
 		buf := jsVertUint8.Get("buffer")
 		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
 		doc.Call("getElementById", "trail-slider").Set("value", "20000")
-		doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
+		doc.Call("getElementById", "slider-value-trail").Set("value", "20000")
 		persistTrail = false
 		doc.Call("getElementById", "persist-trail").Set("checked", false)
 		resetAttractorState()
@@ -883,7 +866,7 @@ func Run() {
 			zoomVal = 95
 		}
 		cameraControl.Set("value", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
-		sliderZoom.Set("textContent", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
+		sliderZoom.Set("value", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
 		return nil
 	}))
 
@@ -971,7 +954,7 @@ func Run() {
 			*target = float32(v)
 			out := doc.Call("getElementById", outID)
 			if out.Truthy() {
-				out.Set("textContent", strconv.FormatFloat(v, 'f', dec, 64))
+				out.Set("value", strconv.FormatFloat(v, 'f', dec, 64))
 			}
 			return nil
 		}))
@@ -981,6 +964,52 @@ func Run() {
 	attachSliderInput("rotation-controls-y", 1, "slider-value-y", &cachedRotY)
 	attachSliderInput("rotation-controls-z", 1, "slider-value-z", &cachedRotZ)
 	readSliderCache()
+
+	// Numeric input → slider: typing a value (committed on Enter/blur)
+	// drives the paired slider, reusing its input handler for all the
+	// downstream work. Uses "change" (not "input") so the slider handler
+	// writing back the formatted value doesn't fight per-keystroke typing.
+	// toSlider maps the typed number to the slider's raw value (identity
+	// for most; log10 for the speed slider, whose display is the effective
+	// multiplier).
+	linkNumToSlider := func(numID, sliderID string, toSlider func(float64) float64) {
+		n := doc.Call("getElementById", numID)
+		s := doc.Call("getElementById", sliderID)
+		if !n.Truthy() || !s.Truthy() {
+			return
+		}
+		n.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			v, err := strconv.ParseFloat(n.Get("value").String(), 64)
+			if err != nil {
+				return nil
+			}
+			if toSlider != nil {
+				v = toSlider(v)
+			}
+			s.Set("value", strconv.FormatFloat(v, 'g', -1, 64))
+			s.Call("dispatchEvent", js.Global().Get("Event").New("input"))
+			return nil
+		}))
+	}
+	linkNumToSlider("slider-value-zoom", "camera-zoom", nil)
+	linkNumToSlider("slider-value-x", "rotation-controls-x", nil)
+	linkNumToSlider("slider-value-y", "rotation-controls-y", nil)
+	linkNumToSlider("slider-value-z", "rotation-controls-z", nil)
+	linkNumToSlider("slider-value-line", "line-width", nil)
+	linkNumToSlider("slider-value-trail", "trail-slider", nil)
+	linkNumToSlider("slider-value-speed", "speed-slider", func(v float64) float64 {
+		if v <= 0 {
+			return -2
+		}
+		lg := math.Log10(v)
+		if lg < -2 {
+			lg = -2
+		}
+		if lg > 2 {
+			lg = 2
+		}
+		return lg
+	})
 
 	// Line-width slider. WebGL's gl.lineWidth() is capped at 1.0
 	// on most modern browsers/drivers (Chrome enforces it; many
@@ -1000,7 +1029,7 @@ func Run() {
 			cachedLineWidth = float32(v)
 			out := doc.Call("getElementById", "slider-value-line")
 			if out.Truthy() {
-				out.Set("textContent", strconv.FormatFloat(v, 'f', 0, 64))
+				out.Set("value", strconv.FormatFloat(v, 'f', 0, 64))
 			}
 			gl.Call("lineWidth", v)
 		}
@@ -1338,7 +1367,7 @@ func applySpeedLog(logVal float64) {
 	} else {
 		label = strconv.FormatFloat(speed, 'f', 2, 64)
 	}
-	doc.Call("getElementById", "slider-value-speed").Set("textContent", label)
+	doc.Call("getElementById", "slider-value-speed").Set("value", label)
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────────────
@@ -1381,7 +1410,10 @@ func buildParamPanel(mode string) {
 		dec := decimalsForStep(p.Step)
 
 		span := doc.Call("createElement", "span")
-		span.Set("style", "margin-right:10px;color:#888;display:inline-block;")
+		// .grp keeps each parameter (label + slider + number + reset +
+		// step + mod controls) on one line so the row wraps by whole
+		// parameters rather than mid-control.
+		span.Set("className", "grp")
 
 		lbl := doc.Call("createElement", "span")
 		lbl.Set("textContent", p.Label+" ")
@@ -1611,7 +1643,7 @@ func readSliderCache() {
 		v, _ := strconv.ParseFloat(el.Get("value").String(), 64)
 		out := doc.Call("getElementById", outID)
 		if out.Truthy() {
-			out.Set("textContent", strconv.FormatFloat(v, 'f', dec, 64))
+			out.Set("value", strconv.FormatFloat(v, 'f', dec, 64))
 		}
 		return float32(v)
 	}
@@ -1707,7 +1739,7 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	// re-randomized below so the model never lands on the same view
 	// twice.
 	cameraControl.Set("value", "0")
-	sliderZoom.Set("textContent", "0.0")
+	sliderZoom.Set("value", "0.0")
 
 	// Reset all parameters to defaults
 	for _, params := range attractorParams {
@@ -1727,10 +1759,10 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	attractorDrawMode = glTypes.LineStrip
 	dragRotX, dragRotY = 0, 0
 	doc.Call("getElementById", "speed-slider").Set("value", "0")
-	doc.Call("getElementById", "slider-value-speed").Set("textContent", "1")
+	doc.Call("getElementById", "slider-value-speed").Set("value", "1")
 	cachedLineWidth = 1
 	doc.Call("getElementById", "line-width").Set("value", "1")
-	doc.Call("getElementById", "slider-value-line").Set("textContent", "1")
+	doc.Call("getElementById", "slider-value-line").Set("value", "1")
 	gl.Call("lineWidth", 1)
 	doc.Call("getElementById", "auto-rotate").Set("checked", true)
 	doc.Call("getElementById", "use-points").Set("checked", false)
@@ -1744,7 +1776,7 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
 	}
 	doc.Call("getElementById", "trail-slider").Set("value", "20000")
-	doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
+	doc.Call("getElementById", "slider-value-trail").Set("value", "20000")
 	persistTrail = false
 	doc.Call("getElementById", "persist-trail").Set("checked", false)
 	gradientMode = 0
