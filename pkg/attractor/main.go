@@ -7,7 +7,6 @@ import (
 	"math"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall/js"
 	"time"
 
@@ -28,9 +27,9 @@ var (
 // ── Attractor state ──────────────────────────────────────────────────────────
 
 var (
-	x, y, z   float32 = 0.1, 0.5, -0.6
-	steps      int = 20000
-	vertBuf        = make([]float32, 20000*4) // pre-allocated vertex buffer (stride 4: x,y,z,t)
+	x, y, z    float32 = 0.1, 0.5, -0.6
+	steps      int     = 20000
+	vertBuf            = make([]float32, 20000*4) // pre-allocated vertex buffer (stride 4: x,y,z,t)
 	speedSteps int     = 1
 	speedScale float32 = 1.0 // dt multiplier for sub-1 speeds
 	// centerOffset is computed after warmup frames and then held stable
@@ -44,15 +43,15 @@ var attractorDrawMode js.Value
 
 // Persistent JS typed arrays — allocated once, reused every frame to avoid GC pressure.
 var (
-	jsVertUint8  js.Value // Uint8Array for CopyBytesToJS
-	jsVertFloat  js.Value // Float32Array view for bufferData
+	jsVertUint8 js.Value // Uint8Array for CopyBytesToJS
+	jsVertFloat js.Value // Float32Array view for bufferData
 )
 
 // ── Camera / view state ──────────────────────────────────────────────────────
 
 var (
-	initCameraDist    float32 = 100
-	defaultCameraDist float32 = 100
+	initCameraDist                     float32 = 100
+	defaultCameraDist                  float32 = 100
 	rotationX, rotationY, rotationZ    float32
 	rotationX1, rotationY1, rotationZ1 float32
 	movMatrix                          mgl32.Mat4
@@ -189,30 +188,31 @@ func initWebGL() {
 // ── DOM element refs ─────────────────────────────────────────────────────────
 
 var (
-	rtc               js.Value
-	cameraControl     js.Value
-	rotationControlsX js.Value
-	rotationControlsY js.Value
-	rotationControlsZ js.Value
-	sliderZoom        js.Value
-	sliderX           js.Value
-	sliderY           js.Value
-	sliderZ           js.Value
-	uBaseColorLoc     js.Value
-	uTopColorLoc      js.Value
-	uMidColorLoc      js.Value
-	uMinZLoc          js.Value
-	uMaxZLoc          js.Value
+	rtc                 js.Value
+	cameraControl       js.Value
+	rotationControlsX   js.Value
+	rotationControlsY   js.Value
+	rotationControlsZ   js.Value
+	sliderZoom          js.Value
+	sliderX             js.Value
+	sliderY             js.Value
+	sliderZ             js.Value
+	uBaseColorLoc       js.Value
+	uTopColorLoc        js.Value
+	uMidColorLoc        js.Value
+	uMinZLoc            js.Value
+	uMaxZLoc            js.Value
 	uMinXLoc            js.Value
 	uMaxXLoc            js.Value
 	uMinYLoc            js.Value
 	uMaxYLoc            js.Value
 	uGradientModeLoc    js.Value
 	uGradientReverseLoc js.Value
+	uPointSizeLoc       js.Value
 	positionLoc         js.Value
 	aTrailTLoc          js.Value
 	shadersReady        bool
-	renderFrame       js.Func
+	renderFrame         js.Func
 )
 
 // ── Parameter definitions with slider ranges ─────────────────────────────────
@@ -321,12 +321,19 @@ const controlsHTML = `
 <style>
 .rst{background:none;border:none;color:#666;cursor:pointer;font-size:13px;padding:0 2px;font-family:monospace;}
 .rst:hover{color:#fff;}
-.ctrl-btn{background:#333;color:#ccc;border:1px solid #555;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:12px;margin-left:4px;}
+.ctrl-btn{background:#333;color:#ccc;border:1px solid #555;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:12px;}
 .ctrl-btn:hover{background:#555;}
-#mode-select{background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:12px;padding:2px 4px;}
+#mode-select,#gradient-type{background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:12px;padding:2px 4px;}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:5px 12px;margin-bottom:5px;}
+.grp{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;color:#aaa;}
+.grp label{color:#aaa;}
+.pcell{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px;white-space:nowrap;vertical-align:top;}
+.numin{width:58px;background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:11px;padding:1px 3px;}
+.row input[type=range]{vertical-align:middle;}
+.sep{width:1px;height:16px;background:#444;margin:0 2px;}
 </style>
-<div style="margin-bottom:6px;">
-  <label>Model <select id="mode-select">
+<div class="row">
+  <span class="grp"><label>Model</label><select id="mode-select">
     <optgroup label="Attractors">
       <option value="rossler">Rossler</option>
       <option value="lorenz">Lorenz</option>
@@ -355,29 +362,33 @@ const controlsHTML = `
       <option value="torus">Torus</option>
       <option value="magnetosphere">Magnetosphere</option>
     </optgroup>
-  </select></label>
+    <optgroup label="Audio">
+      <option value="spectrogram">Spectrogram</option>
+      <option value="xy">XY Scope</option>
+    </optgroup>
+  </select></span>
   <button id="reset-all-btn" class="ctrl-btn">Reset All</button>
-  <span id="extra-nav" style="margin-left:8px;"></span>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
+  <button id="normalize-btn" class="ctrl-btn">Normalize</button>
+  <span id="extra-nav"></span>
+  <span class="sep"></span>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="spectro-skin"> Spectrogram skin</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="audio-mod"> Audio mod</label>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
+  <span class="sep"></span>
   <button id="pause-btn" class="ctrl-btn">Pause</button>
   <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
   <button id="fullscreen-btn" class="ctrl-btn">Fullscreen</button>
   <button id="screenshot-btn" class="ctrl-btn">Screenshot</button>
 </div>
-<div id="params" style="margin-bottom:6px;"></div>
-<div style="margin-bottom:4px;">
-  <label>Base <input type="color" id="color-base" value="#ff0000"></label>
-  <button class="rst" id="rst-color-base" title="Reset">↺</button>
-  <label style="margin-left:4px;">Mid <input type="color" id="color-mid" value="#00ff00"></label>
-  <button class="rst" id="rst-color-mid" title="Reset">↺</button>
-  <label style="margin-left:4px;">Top <input type="color" id="color-top" value="#0000ff"></label>
-  <button class="rst" id="rst-color-top" title="Reset">↺</button>
-  <label style="margin-left:8px;">BG <input type="color" id="color-bg" value="#000000"></label>
-  <button class="rst" id="rst-color-bg" title="Reset">↺</button>
-  <label style="margin-left:8px;">Gradient
-  <select id="gradient-type" style="background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:11px;">
+<div id="params" class="row"></div>
+<div class="row">
+  <span class="grp"><label>Base</label><input type="color" id="color-base" value="#ff0000"><button class="rst" id="rst-color-base" title="Reset">↺</button></span>
+  <span class="grp"><label>Mid</label><input type="color" id="color-mid" value="#00ff00"><button class="rst" id="rst-color-mid" title="Reset">↺</button></span>
+  <span class="grp"><label>Top</label><input type="color" id="color-top" value="#0000ff"><button class="rst" id="rst-color-top" title="Reset">↺</button></span>
+  <span class="grp"><label>BG</label><input type="color" id="color-bg" value="#000000"><button class="rst" id="rst-color-bg" title="Reset">↺</button></span>
+  <span class="grp"><label>Gradient</label><select id="gradient-type">
     <option value="z2">Z Two-color</option>
     <option value="x3">X Three-color</option>
     <option value="y2">Y Two-color</option>
@@ -388,38 +399,18 @@ const controlsHTML = `
     <option value="z-rainbow">Z Rainbow</option>
     <option value="x-rainbow">X Rainbow</option>
     <option value="y-rainbow">Y Rainbow</option>
-  </select></label>
-  <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="gradient-reverse"> Invert</label>
-  <span id="trail-controls" style="margin-left:8px;">
-    <label>Trail <input type="range" id="trail-slider" min="1000" max="500000" value="20000" step="1000" style="width:100px;vertical-align:middle;"></label>
-    <output id="slider-value-trail" style="width:50px;display:inline-block;">20000</output>
-    <button class="rst" id="rst-trail" title="Reset">↺</button>
-    <label style="margin-left:4px;cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
-  </span>
+  </select></span>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="gradient-reverse"> Invert</label>
+  <span id="trail-controls" class="grp"><label>Trail</label><input type="range" id="trail-slider" min="1000" max="500000" value="20000" step="1000" style="width:100px;"><input type="number" id="slider-value-trail" class="numin" min="1000" max="500000" step="1000" value="20000" style="width:66px;"><button class="rst" id="rst-trail" title="Reset">↺</button></span>
+  <label class="grp" style="cursor:pointer;"><input type="checkbox" id="persist-trail"> Persist</label>
 </div>
-<div style="margin-bottom:4px;">
-  <label>Zoom</label>
-  <input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:120px;vertical-align:middle;">
-  <output id="slider-value-zoom" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-zoom" title="Reset">↺</button>
-  <label style="margin-left:8px;">X</label>
-  <input type="range" id="rotation-controls-x" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
-  <output id="slider-value-x" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-rx" title="Reset">↺</button>
-  <label style="margin-left:8px;">Y</label>
-  <input type="range" id="rotation-controls-y" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
-  <output id="slider-value-y" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-ry" title="Reset">↺</button>
-  <label style="margin-left:8px;">Z</label>
-  <input type="range" id="rotation-controls-z" min="-1" max="1" value="0" step="0.1" style="width:80px;vertical-align:middle;">
-  <output id="slider-value-z" style="margin-right:2px;width:24px;display:inline-block;">0</output>
-  <button class="rst" id="rst-rz" title="Reset">↺</button>
-  <label style="margin-left:8px;">Speed <input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;vertical-align:middle;"></label>
-  <output id="slider-value-speed" style="width:40px;display:inline-block;">1</output>
-  <button class="rst" id="rst-speed" title="Reset">↺</button>
-  <label style="margin-left:8px;">Line <input type="range" id="line-width" min="1" max="10" value="1" step="1" style="width:80px;vertical-align:middle;"></label>
-  <output id="slider-value-line" style="width:20px;display:inline-block;">1</output>
-  <button class="rst" id="rst-line" title="Reset">↺</button>
+<div class="row">
+  <span class="grp"><label>Zoom</label><input type="range" id="camera-zoom" min="-95" max="95" value="0" step="1" style="width:110px;"><input type="number" id="slider-value-zoom" class="numin" min="-95" max="95" step="1" value="0"><button class="rst" id="rst-zoom" title="Reset">↺</button></span>
+  <span class="grp"><label>X</label><input type="range" id="rotation-controls-x" min="-1" max="1" value="0" step="0.1" style="width:80px;"><input type="number" id="slider-value-x" class="numin" min="-1" max="1" step="0.1" value="0"><button class="rst" id="rst-rx" title="Reset">↺</button></span>
+  <span class="grp"><label>Y</label><input type="range" id="rotation-controls-y" min="-1" max="1" value="0" step="0.1" style="width:80px;"><input type="number" id="slider-value-y" class="numin" min="-1" max="1" step="0.1" value="0"><button class="rst" id="rst-ry" title="Reset">↺</button></span>
+  <span class="grp"><label>Z</label><input type="range" id="rotation-controls-z" min="-1" max="1" value="0" step="0.1" style="width:80px;"><input type="number" id="slider-value-z" class="numin" min="-1" max="1" step="0.1" value="0"><button class="rst" id="rst-rz" title="Reset">↺</button></span>
+  <span class="grp"><label>Speed</label><input type="range" id="speed-slider" min="-2" max="2" value="0" step="0.01" style="width:80px;"><input type="number" id="slider-value-speed" class="numin" min="0.01" max="100" step="0.01" value="1"><button class="rst" id="rst-speed" title="Reset">↺</button></span>
+  <span class="grp"><label>Line</label><input type="range" id="line-width" min="1" max="10" value="1" step="1" style="width:80px;"><input type="number" id="slider-value-line" class="numin" min="1" max="10" step="1" value="1"><button class="rst" id="rst-line" title="Reset">↺</button></span>
 </div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
@@ -509,7 +500,7 @@ func Run() {
 	doc.Call("getElementById", "rst-zoom").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		defaultCameraDist = initCameraDist
 		cameraControl.Set("value", "0")
-		sliderZoom.Set("textContent", "0")
+		sliderZoom.Set("value", "0")
 		updateViewMatrix()
 		return nil
 	}))
@@ -520,27 +511,34 @@ func Run() {
 	doc.Call("getElementById", "rst-rx").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationX, rotationX1 = 0, 0
 		rotationControlsX.Set("value", "0")
-		sliderX.Set("textContent", "0.0")
+		sliderX.Set("value", "0.0")
 		stopAutoRotate()
 		return nil
 	}))
 	doc.Call("getElementById", "rst-ry").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationY, rotationY1 = 0, 0
 		rotationControlsY.Set("value", "0")
-		sliderY.Set("textContent", "0.0")
+		sliderY.Set("value", "0.0")
 		stopAutoRotate()
 		return nil
 	}))
 	doc.Call("getElementById", "rst-rz").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		rotationZ, rotationZ1 = 0, 0
 		rotationControlsZ.Set("value", "0")
-		sliderZ.Set("textContent", "0.0")
+		sliderZ.Set("value", "0.0")
 		stopAutoRotate()
 		return nil
 	}))
 
 	// Event: reset all button
 	doc.Call("getElementById", "reset-all-btn").Call("addEventListener", "click", js.FuncOf(onResetAll))
+
+	// Event: normalize — reorient the current model to the default
+	// (identity) pose and stop any slider-driven spin.
+	doc.Call("getElementById", "normalize-btn").Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		normalizeOrientation()
+		return nil
+	}))
 
 	// Event: speed slider
 	doc.Call("getElementById", "speed-slider").Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
@@ -554,13 +552,30 @@ func Run() {
 		speedSteps = 1
 		speedScale = 1.0
 		doc.Call("getElementById", "speed-slider").Set("value", "0")
-		doc.Call("getElementById", "slider-value-speed").Set("textContent", "1")
+		doc.Call("getElementById", "slider-value-speed").Set("value", "1")
 		return nil
 	}))
 
 	// Event: auto-rotate checkbox
 	doc.Call("getElementById", "auto-rotate").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		autoRotate = doc.Call("getElementById", "auto-rotate").Get("checked").Bool()
+		return nil
+	}))
+
+	// Event: spectrogram-skin checkbox — paint the live spectrogram onto
+	// the current surface model (sphere/globe/torus).
+	doc.Call("getElementById", "spectro-skin").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		spectroSkin = doc.Call("getElementById", "spectro-skin").Get("checked").Bool()
+		skinDirty = true
+		generateForMode(selectedMode)
+		return nil
+	}))
+
+	// Event: audio-mod checkbox — enable per-parameter audio modulation.
+	// The per-parameter routing controls appear under each attractor
+	// parameter (built by buildParamPanel) while this is checked.
+	doc.Call("getElementById", "audio-mod").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		setAudioMod(doc.Call("getElementById", "audio-mod").Get("checked").Bool())
 		return nil
 	}))
 
@@ -589,7 +604,7 @@ func Run() {
 				resetAttractorState()
 				refreshGradient()
 			}
-			doc.Call("getElementById", "slider-value-trail").Set("textContent", strconv.FormatFloat(val, 'f', 0, 64))
+			doc.Call("getElementById", "slider-value-trail").Set("value", strconv.FormatFloat(val, 'f', 0, 64))
 		}
 		return nil
 	}))
@@ -600,7 +615,7 @@ func Run() {
 		buf := jsVertUint8.Get("buffer")
 		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
 		doc.Call("getElementById", "trail-slider").Set("value", "20000")
-		doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
+		doc.Call("getElementById", "slider-value-trail").Set("value", "20000")
 		persistTrail = false
 		doc.Call("getElementById", "persist-trail").Set("checked", false)
 		resetAttractorState()
@@ -852,22 +867,25 @@ func Run() {
 			zoomVal = 95
 		}
 		cameraControl.Set("value", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
-		sliderZoom.Set("textContent", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
+		sliderZoom.Set("value", strconv.FormatFloat(float64(zoomVal), 'f', 0, 64))
 		return nil
 	}))
 
-	// Initial mode — read from URL hash if present
+	// Initial mode — read from URL hash if present. The hash may carry
+	// permalink state after the mode ("#aizawa&p.a=1.19&..."); take only
+	// the leading mode token here (the rest is applied post-setup).
 	selectedMode = "globe"
 	hash := js.Global().Get("location").Get("hash").String()
 	if len(hash) > 1 {
-		hashMode := hash[1:]
+		hashMode := hashModeToken()
 		// Validate it's a known mode
 		if _, ok := attractorParams[hashMode]; ok {
 			selectedMode = hashMode
 		} else {
 			// Check non-parameterized modes
 			switch hashMode {
-			case "tetrahedron", "cube", "octahedron", "dodecahedron", "icosahedron", "nestedcube", "globe", "magnetosphere":
+			case "tetrahedron", "cube", "octahedron", "dodecahedron", "icosahedron", "nestedcube", "globe", "magnetosphere",
+				"spectrogram", "xy":
 				selectedMode = hashMode
 			}
 		}
@@ -892,9 +910,14 @@ func Run() {
 	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
 	gl.Call("bindBuffer", glTypes.ElementArrayBuffer, attractorIndexBuffer)
 	setupShaders()
+	setupTexShaders()
 	setupMatrices()
 	generateForMode(selectedMode)
-	autoFitCamera()
+	if selectedMode == "spectrogram" {
+		setSpectrogramCamera()
+	} else {
+		autoFitCamera()
+	}
 	refreshGradient()
 
 	// Check if debug mode is enabled via JS global
@@ -902,6 +925,13 @@ func Run() {
 	if !debugVal.IsUndefined() && debugVal.Bool() {
 		debugEnabled = true
 	}
+
+	// Permalink: capture pristine control defaults, restore any state
+	// encoded in the URL hash, then keep the hash in sync with the live
+	// state so the current view is always shareable.
+	capturePermaDefaults()
+	applyStateFromHash()
+	startPermalinkSync()
 
 	// Start animation loop
 	done := make(chan struct{})
@@ -925,7 +955,7 @@ func Run() {
 			*target = float32(v)
 			out := doc.Call("getElementById", outID)
 			if out.Truthy() {
-				out.Set("textContent", strconv.FormatFloat(v, 'f', dec, 64))
+				out.Set("value", strconv.FormatFloat(v, 'f', dec, 64))
 			}
 			return nil
 		}))
@@ -935,6 +965,52 @@ func Run() {
 	attachSliderInput("rotation-controls-y", 1, "slider-value-y", &cachedRotY)
 	attachSliderInput("rotation-controls-z", 1, "slider-value-z", &cachedRotZ)
 	readSliderCache()
+
+	// Numeric input → slider: typing a value (committed on Enter/blur)
+	// drives the paired slider, reusing its input handler for all the
+	// downstream work. Uses "change" (not "input") so the slider handler
+	// writing back the formatted value doesn't fight per-keystroke typing.
+	// toSlider maps the typed number to the slider's raw value (identity
+	// for most; log10 for the speed slider, whose display is the effective
+	// multiplier).
+	linkNumToSlider := func(numID, sliderID string, toSlider func(float64) float64) {
+		n := doc.Call("getElementById", numID)
+		s := doc.Call("getElementById", sliderID)
+		if !n.Truthy() || !s.Truthy() {
+			return
+		}
+		n.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			v, err := strconv.ParseFloat(n.Get("value").String(), 64)
+			if err != nil {
+				return nil
+			}
+			if toSlider != nil {
+				v = toSlider(v)
+			}
+			s.Set("value", strconv.FormatFloat(v, 'g', -1, 64))
+			s.Call("dispatchEvent", js.Global().Get("Event").New("input"))
+			return nil
+		}))
+	}
+	linkNumToSlider("slider-value-zoom", "camera-zoom", nil)
+	linkNumToSlider("slider-value-x", "rotation-controls-x", nil)
+	linkNumToSlider("slider-value-y", "rotation-controls-y", nil)
+	linkNumToSlider("slider-value-z", "rotation-controls-z", nil)
+	linkNumToSlider("slider-value-line", "line-width", nil)
+	linkNumToSlider("slider-value-trail", "trail-slider", nil)
+	linkNumToSlider("slider-value-speed", "speed-slider", func(v float64) float64 {
+		if v <= 0 {
+			return -2
+		}
+		lg := math.Log10(v)
+		if lg < -2 {
+			lg = -2
+		}
+		if lg > 2 {
+			lg = 2
+		}
+		return lg
+	})
 
 	// Line-width slider. WebGL's gl.lineWidth() is capped at 1.0
 	// on most modern browsers/drivers (Chrome enforces it; many
@@ -954,7 +1030,7 @@ func Run() {
 			cachedLineWidth = float32(v)
 			out := doc.Call("getElementById", "slider-value-line")
 			if out.Truthy() {
-				out.Set("textContent", strconv.FormatFloat(v, 'f', 0, 64))
+				out.Set("value", strconv.FormatFloat(v, 'f', 0, 64))
 			}
 			gl.Call("lineWidth", v)
 		}
@@ -997,6 +1073,12 @@ func Run() {
 	// doesn't start in the same pose every load. Must run AFTER the
 	// rotation-controls-x/y/z elements are created and queried.
 	randomizeOrientation()
+	// The spectrogram wants a static, face-on default instead — undo the
+	// randomized pose/spin for an initial #spectrogram load (mode switches
+	// go through onModeChange, which already handles this).
+	if selectedMode == "spectrogram" {
+		setSpectrogramCamera()
+	}
 
 	// Wheel-on-input: scroll over a range/number input adjusts its
 	// value by `step` instead of scrolling the host page. Fires the
@@ -1229,16 +1311,16 @@ var attractorDescriptions = map[string]string{
 	"burkeshaw": "Burke-Shaw Attractor — Introduced by Bill Burke and Robert Shaw, this system exhibits chaotic behavior with a distinctive two-winged structure. " +
 		"It arises from the study of nonlinear dynamics and produces complex trajectories confined to a compact region of phase space.\n\n" +
 		"dx/dt = −S(x + y)\ndy/dt = −y − Sxz\ndz/dt = Sxy + V",
-	"tetrahedron":    "Tetrahedron — The simplest Platonic solid, with 4 triangular faces, 6 edges, and 4 vertices. It is its own dual.",
-	"cube":           "Cube (Hexahedron) — A Platonic solid with 6 square faces, 12 edges, and 8 vertices. Its dual is the octahedron.",
-	"octahedron":     "Octahedron — A Platonic solid with 8 triangular faces, 12 edges, and 6 vertices. Its dual is the cube.",
-	"dodecahedron":   "Dodecahedron — A Platonic solid with 12 pentagonal faces, 30 edges, and 20 vertices. Its dual is the icosahedron.",
-	"icosahedron":    "Icosahedron — A Platonic solid with 20 triangular faces, 30 edges, and 12 vertices. Its dual is the dodecahedron.",
-	"nestedcube":     "Nested Cube — A cube within a cube, connected at the vertices, illustrating the relationship between inner and outer geometric structures.",
-	"globe":          "Globe — A wireframe sphere showing lines of latitude and longitude, similar to the graticule on a geographic globe. Latitude lines are horizontal circles parallel to the equator, longitude lines are great circles passing through the poles.",
-	"sphere":         "Sphere — A perfectly round three-dimensional surface where every point is equidistant from the center. Generated as a UV sphere with configurable latitude and longitude subdivisions.",
-	"torus":          "Torus — A doughnut-shaped surface of revolution generated by revolving a circle (radius r) around an axis at distance R from the center of the circle.",
-	"magnetosphere":  "Magnetosphere — A visualization of magnetic field lines surrounding a dipole, similar to Earth's magnetosphere that shields the planet from solar wind.",
+	"tetrahedron":   "Tetrahedron — The simplest Platonic solid, with 4 triangular faces, 6 edges, and 4 vertices. It is its own dual.",
+	"cube":          "Cube (Hexahedron) — A Platonic solid with 6 square faces, 12 edges, and 8 vertices. Its dual is the octahedron.",
+	"octahedron":    "Octahedron — A Platonic solid with 8 triangular faces, 12 edges, and 6 vertices. Its dual is the cube.",
+	"dodecahedron":  "Dodecahedron — A Platonic solid with 12 pentagonal faces, 30 edges, and 20 vertices. Its dual is the icosahedron.",
+	"icosahedron":   "Icosahedron — A Platonic solid with 20 triangular faces, 30 edges, and 12 vertices. Its dual is the dodecahedron.",
+	"nestedcube":    "Nested Cube — A cube within a cube, connected at the vertices, illustrating the relationship between inner and outer geometric structures.",
+	"globe":         "Globe — A wireframe sphere showing lines of latitude and longitude, similar to the graticule on a geographic globe. Latitude lines are horizontal circles parallel to the equator, longitude lines are great circles passing through the poles.",
+	"sphere":        "Sphere — A perfectly round three-dimensional surface where every point is equidistant from the center. Generated as a UV sphere with configurable latitude and longitude subdivisions.",
+	"torus":         "Torus — A doughnut-shaped surface of revolution generated by revolving a circle (radius r) around an axis at distance R from the center of the circle.",
+	"magnetosphere": "Magnetosphere — A visualization of magnetic field lines surrounding a dipole, similar to Earth's magnetosphere that shields the planet from solar wind.",
 }
 
 func resetAttractorState() {
@@ -1252,8 +1334,14 @@ func resetAttractorState() {
 }
 
 // checkDiverged returns true and resets state if the attractor has diverged (NaN or >1e6).
+// checkDiverged resets the integrator state if it has blown up. The bound
+// is well above every attractor's normal extent (tens of units) but low
+// enough to catch an off-screen blow-up promptly — so an over-modulated
+// attractor recovers on its own once the offending depth is dialed back,
+// rather than drifting invisibly at huge coordinates.
 func checkDiverged() bool {
-	if x != x || y != y || z != z || x > 1e6 || x < -1e6 || y > 1e6 || y < -1e6 || z > 1e6 || z < -1e6 {
+	const lim = 1e4
+	if x != x || y != y || z != z || x > lim || x < -lim || y > lim || y < -lim || z > lim || z < -lim {
 		resetAttractorState()
 		return true
 	}
@@ -1280,7 +1368,7 @@ func applySpeedLog(logVal float64) {
 	} else {
 		label = strconv.FormatFloat(speed, 'f', 2, 64)
 	}
-	doc.Call("getElementById", "slider-value-speed").Set("textContent", label)
+	doc.Call("getElementById", "slider-value-speed").Set("value", label)
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────────────
@@ -1322,12 +1410,18 @@ func buildParamPanel(mode string) {
 		p := p // capture for closure
 		dec := decimalsForStep(p.Step)
 
+		// Each parameter is a 2-row cell: the control on top, its
+		// audio-mod routing directly beneath. The cell keeps its rows
+		// together so the panel wraps by whole parameter.
 		span := doc.Call("createElement", "span")
-		span.Set("style", "margin-right:10px;color:#888;display:inline-block;")
+		span.Set("className", "pcell")
+
+		topRow := doc.Call("createElement", "span")
+		topRow.Set("className", "grp")
 
 		lbl := doc.Call("createElement", "span")
 		lbl.Set("textContent", p.Label+" ")
-		span.Call("appendChild", lbl)
+		topRow.Call("appendChild", lbl)
 
 		stepStr := strconv.FormatFloat(float64(p.Step), 'g', -1, 32)
 		minStr := strconv.FormatFloat(float64(p.Min), 'g', -1, 32)
@@ -1338,8 +1432,10 @@ func buildParamPanel(mode string) {
 		slider.Set("id", p.ID)
 		slider.Set("min", minStr)
 		slider.Set("max", maxStr)
-		slider.Set("value", strconv.FormatFloat(float64(*p.Value), 'g', -1, 32))
+		// step must be set before value, else the browser snaps value to
+		// the default step-1 grid (e.g. 0.95 -> 1.1) and the thumb is wrong.
 		slider.Set("step", stepStr)
+		slider.Set("value", strconv.FormatFloat(float64(*p.Value), 'g', -1, 32))
 		slider.Set("style", "width:80px;vertical-align:middle;")
 
 		numInput := doc.Call("createElement", "input")
@@ -1409,10 +1505,69 @@ func buildParamPanel(mode string) {
 			return nil
 		}))
 
-		span.Call("appendChild", slider)
-		span.Call("appendChild", numInput)
-		span.Call("appendChild", rst)
-		span.Call("appendChild", stepInput)
+		topRow.Call("appendChild", slider)
+		topRow.Call("appendChild", numInput)
+		topRow.Call("appendChild", rst)
+		topRow.Call("appendChild", stepInput)
+		span.Call("appendChild", topRow)
+
+		// Per-parameter audio-mod routing (only while Audio mod is on):
+		// on the row below the parameter — a source dropdown + a signed
+		// level slider. Config persists in paramMods across panel
+		// rebuilds and mode switches.
+		if audioMod {
+			id := p.ID
+			cur := paramMods[id]
+
+			modRow := doc.Call("createElement", "span")
+			modRow.Set("className", "grp")
+
+			sep := doc.Call("createElement", "span")
+			sep.Set("textContent", "⟿")
+			sep.Set("style", "color:#8cf;")
+			modRow.Call("appendChild", sep)
+
+			sel := doc.Call("createElement", "select")
+			sel.Set("title", "Audio source for "+p.Label)
+			sel.Set("style", "background:#12203a;color:#8cf;border:1px solid #446;font-size:10px;vertical-align:middle;")
+			for _, s := range modSources {
+				opt := doc.Call("createElement", "option")
+				opt.Set("value", s.name)
+				opt.Set("textContent", s.label)
+				if s.name == cur.source {
+					opt.Set("selected", true)
+				}
+				sel.Call("appendChild", opt)
+			}
+			sel.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+				m := paramMods[id]
+				m.source = sel.Get("value").String()
+				paramMods[id] = m
+				return nil
+			}))
+
+			lvl := doc.Call("createElement", "input")
+			lvl.Set("type", "range")
+			lvl.Set("min", "-1")
+			lvl.Set("max", "1")
+			lvl.Set("step", "0.01")
+			lvl.Set("value", strconv.FormatFloat(float64(cur.level), 'g', -1, 32))
+			lvl.Set("title", "Mod level for "+p.Label+" (± inverts, 0 = off)")
+			lvl.Set("style", "width:70px;vertical-align:middle;")
+			lvl.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+				if v, err := strconv.ParseFloat(lvl.Get("value").String(), 32); err == nil {
+					m := paramMods[id]
+					m.level = float32(v)
+					paramMods[id] = m
+				}
+				return nil
+			}))
+
+			modRow.Call("appendChild", sel)
+			modRow.Call("appendChild", lvl)
+			span.Call("appendChild", modRow)
+		}
+
 		paramsDiv.Call("appendChild", span)
 	}
 	if rebindParamWheel != nil {
@@ -1498,7 +1653,7 @@ func readSliderCache() {
 		v, _ := strconv.ParseFloat(el.Get("value").String(), 64)
 		out := doc.Call("getElementById", outID)
 		if out.Truthy() {
-			out.Set("textContent", strconv.FormatFloat(v, 'f', dec, 64))
+			out.Set("value", strconv.FormatFloat(v, 'f', dec, 64))
 		}
 		return float32(v)
 	}
@@ -1508,10 +1663,25 @@ func readSliderCache() {
 	cachedRotZ = pull("rotation-controls-z", 1, "slider-value-z")
 }
 
+// normalizeOrientation resets the current model to the default identity
+// pose and zeroes the per-axis spin rates, so it faces the camera head-on.
+// Auto-rotate (if on) still applies afterward.
+func normalizeOrientation() {
+	movMatrix = mgl32.Ident4()
+	zeroRotationSliders()
+	updateModelMatrix()
+}
+
 // randomizeOrientation gives the model a fresh random starting pose
 // and a small random rotation rate on each of X/Y/Z. Called on Run()
 // startup and from Reset All so the user gets a varied view each
-// time instead of always starting at the identity-matrix pose.
+// time instead of always starting at the identity-matrix pose. Only the
+// pose is randomized — NOT the X/Y/Z spin-rate sliders. Setting random
+// rates made the model spin perpetually and, because the sliders show one
+// decimal, it was easy to leave a hidden nonzero rate that kept it turning
+// even with auto-rotate off. Spin now comes only from auto-rotate or an
+// explicit slider, so unchecking auto-rotate (with the sliders at 0)
+// fully stops it.
 func randomizeOrientation() {
 	mathJS := js.Global().Get("Math")
 	randSym := func() float32 { return float32(mathJS.Call("random").Float()*2 - 1) }
@@ -1521,21 +1691,8 @@ func randomizeOrientation() {
 	movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(randSym() * float32(math.Pi)))
 	movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DZ(randSym() * float32(math.Pi)))
 
-	setSliderVal := func(id string, v float32) {
-		el := doc.Call("getElementById", id)
-		if el.Truthy() {
-			el.Set("value", strconv.FormatFloat(float64(v), 'f', 2, 32))
-			out := doc.Call("getElementById", "slider-value-"+strings.TrimPrefix(id, "rotation-controls-"))
-			if out.Truthy() {
-				out.Set("textContent", strconv.FormatFloat(float64(v), 'f', 2, 32))
-			}
-		}
-	}
-	setSliderVal("rotation-controls-x", randSym()*0.15)
-	setSliderVal("rotation-controls-y", randSym()*0.15)
-	setSliderVal("rotation-controls-z", randSym()*0.15)
-	// Sync the Go-side cache with the values we just wrote.
-	readSliderCache()
+	// Ensure the spin-rate sliders (and their cache) are zeroed.
+	zeroRotationSliders()
 }
 
 func onModeChange(this js.Value, args []js.Value) interface{} {
@@ -1544,18 +1701,23 @@ func onModeChange(this js.Value, args []js.Value) interface{} {
 		selectedMode = sel.Get("value").String()
 	}
 	// New mode means fresh geometry — force an upload on the next
-	// uploadBuffersIndexed for static modes.
+	// uploadBuffersIndexed for static modes, and a skin-mesh rebuild.
 	staticGeomDirty = true
+	skinDirty = true
 	resetAttractorState()
 	buildParamPanel(selectedMode)
 	updateInfoOverlay()
 	updateTrailVisibility()
-	// Update URL hash
-	js.Global().Get("location").Set("hash", selectedMode)
 	// Run one frame to populate vertices, then update gradient and fit camera
 	generateForMode(selectedMode)
-	autoFitCamera()
+	if selectedMode == "spectrogram" {
+		setSpectrogramCamera()
+	} else {
+		restoreAutoRotateAfterSpectrogram()
+		autoFitCamera()
+	}
 	refreshGradient()
+	syncPermalinkNow() // reflect the new mode in the URL immediately
 	return nil
 }
 
@@ -1587,7 +1749,7 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	// re-randomized below so the model never lands on the same view
 	// twice.
 	cameraControl.Set("value", "0")
-	sliderZoom.Set("textContent", "0.0")
+	sliderZoom.Set("value", "0.0")
 
 	// Reset all parameters to defaults
 	for _, params := range attractorParams {
@@ -1607,10 +1769,10 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 	attractorDrawMode = glTypes.LineStrip
 	dragRotX, dragRotY = 0, 0
 	doc.Call("getElementById", "speed-slider").Set("value", "0")
-	doc.Call("getElementById", "slider-value-speed").Set("textContent", "1")
+	doc.Call("getElementById", "slider-value-speed").Set("value", "1")
 	cachedLineWidth = 1
 	doc.Call("getElementById", "line-width").Set("value", "1")
-	doc.Call("getElementById", "slider-value-line").Set("textContent", "1")
+	doc.Call("getElementById", "slider-value-line").Set("value", "1")
 	gl.Call("lineWidth", 1)
 	doc.Call("getElementById", "auto-rotate").Set("checked", true)
 	doc.Call("getElementById", "use-points").Set("checked", false)
@@ -1624,7 +1786,7 @@ func onResetAll(this js.Value, args []js.Value) interface{} {
 		jsVertFloat = js.Global().Get("Float32Array").New(buf, 0, steps*4)
 	}
 	doc.Call("getElementById", "trail-slider").Set("value", "20000")
-	doc.Call("getElementById", "slider-value-trail").Set("textContent", "20000")
+	doc.Call("getElementById", "slider-value-trail").Set("value", "20000")
 	persistTrail = false
 	doc.Call("getElementById", "persist-trail").Set("checked", false)
 	gradientMode = 0

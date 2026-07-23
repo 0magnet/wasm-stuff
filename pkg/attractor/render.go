@@ -4,7 +4,6 @@ package attractor
 
 import (
 	"syscall/js"
-	"unsafe"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -103,11 +102,12 @@ var vertShaderCode = `
 	uniform mat4 Pmatrix;
 	uniform mat4 Vmatrix;
 	uniform mat4 Mmatrix;
+	uniform float uPointSize;
 	varying vec3 vPosition;
 	varying float vTrailT;
 	void main(void) {
 		gl_Position = Pmatrix * Vmatrix * Mmatrix * vec4(position, 1.0);
-		gl_PointSize = 2.0;
+		gl_PointSize = uPointSize;
 		vPosition = position;
 		vTrailT = aTrailT;
 	}
@@ -147,6 +147,8 @@ func setupShaders() {
 	uMaxYLoc = gl.Call("getUniformLocation", shaderProgram, "uMaxY")
 	uGradientModeLoc = gl.Call("getUniformLocation", shaderProgram, "uGradientMode")
 	uGradientReverseLoc = gl.Call("getUniformLocation", shaderProgram, "uGradientReverse")
+	uPointSizeLoc = gl.Call("getUniformLocation", shaderProgram, "uPointSize")
+	gl.Call("uniform1f", uPointSizeLoc, 2.0)
 	gl.Call("uniform3f", uBaseColorLoc, baseColor[0], baseColor[1], baseColor[2])
 	gl.Call("uniform3f", uTopColorLoc, topColor[0], topColor[1], topColor[2])
 	gl.Call("uniform3f", uMidColorLoc, midColor[0], midColor[1], midColor[2])
@@ -167,29 +169,31 @@ func setupShaders() {
 }
 
 func setupMatrices() {
-	projMatrix := mgl32.Perspective(mgl32.DegToRad(45.0), float32(width)/float32(height), 1, 100.0)
-	projMatrixBuffer := (*[16]float32)(unsafe.Pointer(&projMatrix))
-	typedProjMatrixBuffer := SliceToTypedArray([]float32((*projMatrixBuffer)[:]))
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Pmatrix"), false, typedProjMatrixBuffer)
+	// projMatrix is a pkg var (textured_js.go) so texProgram can reuse it.
+	projMatrix = mgl32.Perspective(mgl32.DegToRad(45.0), float32(width)/float32(height), 1, 100.0)
+	gl.Call("useProgram", shaderProgram)
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Pmatrix"), false, mat4ToTyped(&projMatrix))
 
 	movMatrix = mgl32.Ident4()
 	updateViewMatrix()
 	updateModelMatrix()
 }
 
+// updateViewMatrix recomputes the camera and uploads it to the attractor
+// program. texProgram receives it separately (useTexProgram reads the
+// pkg-level viewMatrix), so we force the attractor program active here to
+// keep the upload correct even if a textured draw left texProgram bound.
 func updateViewMatrix() {
 	cameraPosition := mgl32.Vec3{0.0, 0.0, defaultCameraDist}
 	center := mgl32.Vec3{0.0, 0.0, 0.0}
-	viewMatrix := mgl32.LookAtV(cameraPosition, center, mgl32.Vec3{0.0, 1.0, 0.0})
-	viewMatrixBuffer := (*[16]float32)(unsafe.Pointer(&viewMatrix))
-	typedViewMatrixBuffer := SliceToTypedArray([]float32((*viewMatrixBuffer)[:]))
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Vmatrix"), false, typedViewMatrixBuffer)
+	viewMatrix = mgl32.LookAtV(cameraPosition, center, mgl32.Vec3{0.0, 1.0, 0.0})
+	gl.Call("useProgram", shaderProgram)
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Vmatrix"), false, mat4ToTyped(&viewMatrix))
 }
 
 func updateModelMatrix() {
-	modelMatrixBuffer := (*[16]float32)(unsafe.Pointer(&movMatrix))
-	typedModelMatrixBuffer := SliceToTypedArray([]float32((*modelMatrixBuffer)[:]))
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, typedModelMatrixBuffer)
+	gl.Call("useProgram", shaderProgram)
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, mat4ToTyped(&movMatrix))
 }
 
 func autoFitCamera() {
@@ -222,6 +226,40 @@ func autoFitCamera() {
 }
 
 func generateForMode(mode string) {
+	// Spectrogram is a textured plane drawn through the shared 3D pipeline
+	// (texProgram); update its texture and draw it, then bail out of the
+	// attractor path.
+	if mode == "spectrogram" {
+		renderSpectrogramMode(frameNowMs)
+		return
+	}
+	// Spectrogram skin: paint the live texture onto a surface model
+	// instead of its wireframe, drawn through the same textured pipeline.
+	if spectroSkin && isSkinnable(mode) {
+		renderSkinnedMode(mode, frameNowMs)
+		return
+	}
+	// xy scope draws on its own 2D program via renderAudioFrame; skip the
+	// attractor pipeline entirely. This path is still reached via
+	// onModeChange / buildParamPanel / paused-frame redraw, so a plain
+	// return is the correct response.
+	if isAudioMode(mode) {
+		return
+	}
+	// Transitioning back into an attractor mode from audio: restore
+	// the attractor useProgram binding NOW rather than waiting for the
+	// next render frame, because our caller (onModeChange) is about to
+	// issue drawArrays / drawElements and would draw with the wrong
+	// shader program bound.
+	if audioModeActive {
+		deactivateAudioMode()
+	}
+	// Ensure the attractor program is bound — a prior spectrogram frame
+	// leaves texProgram active, and the uniform/draw calls below apply to
+	// whatever program is current.
+	if !shaderProgram.IsUndefined() {
+		gl.Call("useProgram", shaderProgram)
+	}
 	if shadersReady {
 		gl.Call("uniform1i", uGradientModeLoc, gradientMode)
 		if gradientReverse {
@@ -230,6 +268,10 @@ func generateForMode(mode string) {
 			gl.Call("uniform1i", uGradientReverseLoc, 0)
 		}
 	}
+	// Audio-reactive: modulate ODE params (dt, primary chaos param) for
+	// this integration step, and the colors / point size for this frame.
+	// No-op unless audio-reactive is on and the mode is an attractor.
+	saved := applyAudioModulation(mode)
 	switch mode {
 	case "lorenz":
 		generateLorenz()
@@ -278,6 +320,7 @@ func generateForMode(mode string) {
 	default:
 		generateRossler()
 	}
+	restoreAudioModulation(saved)
 }
 
 func renderLoop(this js.Value, args []js.Value) interface{} {
@@ -287,6 +330,31 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 		gl.Call("clear", glTypes.ColorBufferBit)
 		gl.Call("clear", glTypes.DepthBufferBit)
 		return nil
+	}
+
+	// Audio modes (spectrogram, xy) render with their own shader
+	// program on the shared #gocanvas. Route them here so we skip the
+	// entire 3D attractor pipeline for the frame. Transition helpers
+	// swap the useProgram binding when moving between attractor and
+	// audio modes so neither pipeline sees the other's state.
+	if len(args) > 0 {
+		frameNowMs = args[0].Float() // rAF timestamp (ms), used by spectrogram scroll
+	}
+
+	// Refresh audio features (no-op unless audio-reactive is on); Phase 2
+	// mappings read these to modulate the attractors.
+	updateAudioFeatures()
+
+	if isAudioMode(selectedMode) {
+		if !audioModeActive {
+			activateAudioMode()
+		}
+		renderAudioFrame(selectedMode)
+		js.Global().Call("requestAnimationFrame", renderFrame)
+		return nil
+	}
+	if audioModeActive {
+		deactivateAudioMode()
 	}
 
 	now := float32(args[0].Float())
