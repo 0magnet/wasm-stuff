@@ -22,12 +22,18 @@ var (
 	audioOverlay    js.Value
 )
 
-// ensureMicSource returns the shared audio source, creating it on first
+// ensureAudioSource returns the shared audio source, creating it on first
 // call. Safe to call every frame — the second and subsequent calls just
 // return the cached value. Returns nil only if the source can't be
-// constructed at all (unlikely; permission-denied still returns a
-// non-nil source with Ready()==false and Err()!=nil).
-func ensureMicSource() audiosrc.Source {
+// constructed at all (unlikely; a failed source still returns non-nil
+// with Ready()==false and Err()!=nil).
+//
+// The backend is chosen from the ?audio= query param:
+//   - audio=ws (or websocket): stream from a WebSocket server (the
+//     audioprism-go-style /ws feed served by cmd/audiows). An optional
+//     ?wsurl= overrides the endpoint; default is same-origin /ws.
+//   - anything else / absent: the browser microphone via getUserMedia.
+func ensureAudioSource() audiosrc.Source {
 	if audioSource != nil {
 		return audioSource
 	}
@@ -35,11 +41,32 @@ func ensureMicSource() audiosrc.Source {
 		return nil
 	}
 	audioSourceTried = true
-	audioSource = audiosrc.NewMic(audiosrc.MicOptions{
-		FFTSize: 2048,
-		Stereo:  true,
-	})
+	switch audioBackendKind() {
+	case "ws", "websocket":
+		audioSource = audiosrc.NewWebSocket(audiosrc.WSOptions{
+			URL: queryParam("wsurl"),
+		})
+	default:
+		audioSource = audiosrc.NewMic(audiosrc.MicOptions{
+			FFTSize: 2048,
+			Stereo:  true,
+		})
+	}
 	return audioSource
+}
+
+// audioBackendKind reads the ?audio= query param (empty when absent).
+func audioBackendKind() string { return queryParam("audio") }
+
+// queryParam returns the named URL query parameter from window.location,
+// or "" if not present.
+func queryParam(name string) string {
+	search := js.Global().Get("location").Get("search")
+	params := js.Global().Get("URLSearchParams").New(search)
+	if v := params.Call("get", name); v.Truthy() {
+		return v.String()
+	}
+	return ""
 }
 
 // isAudioMode reports whether the given mode name is one of the
@@ -66,12 +93,12 @@ func renderAudioFrame(mode string) {
 }
 
 // activateAudioMode runs once when the mode dispatch transitions from an
-// attractor mode into an audio mode. It kicks off the mic request (which
-// pops the browser permission prompt) but otherwise does nothing heavy —
-// the individual renderers do their own lazy shader/texture setup.
+// attractor mode into an audio mode. It kicks off the audio source (mic
+// permission prompt, or WebSocket connect) but otherwise does nothing
+// heavy — the individual renderers do their own lazy shader/texture setup.
 func activateAudioMode() {
 	audioModeActive = true
-	ensureMicSource()
+	ensureAudioSource()
 }
 
 // deactivateAudioMode runs once when we transition back out of an audio

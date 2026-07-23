@@ -92,7 +92,7 @@ func renderXYFrame() {
 	if !xyReady {
 		initXY()
 	}
-	src := ensureMicSource()
+	src := ensureAudioSource()
 
 	if src != nil && src.Ready() {
 		src.TimeDomainStereo(xyBufL, xyBufR)

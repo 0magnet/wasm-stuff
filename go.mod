@@ -7,7 +7,9 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-gl/mathgl v1.2.0
 	github.com/ivanpirog/coloredcobra v1.0.1
+	github.com/jfreymuth/pulse v0.1.2
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/net v0.57.0
 )
 
 require (
@@ -41,7 +43,6 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.8.0 // indirect
 	golang.org/x/arch v0.29.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

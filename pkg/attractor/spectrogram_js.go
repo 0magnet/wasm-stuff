@@ -143,7 +143,7 @@ func renderSpectrogramFrame() {
 	if !spectReady {
 		initSpectrogram()
 	}
-	src := ensureMicSource()
+	src := ensureAudioSource()
 
 	// If the canvas has resized since init, throw away our texture and
 	// rebuild. Cheap because the texture is the only sized resource.
