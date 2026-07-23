@@ -313,7 +313,11 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 		if !audioModeActive {
 			activateAudioMode()
 		}
-		renderAudioFrame(selectedMode)
+		var nowMs float64
+		if len(args) > 0 {
+			nowMs = args[0].Float() // rAF timestamp (ms)
+		}
+		renderAudioFrame(selectedMode, nowMs)
 		js.Global().Call("requestAnimationFrame", renderFrame)
 		return nil
 	}

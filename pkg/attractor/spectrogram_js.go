@@ -41,21 +41,47 @@ const spectFragShaderSrc = `
 `
 
 var (
-	spectProgram    js.Value
-	spectTexture    js.Value
-	spectVBuf       js.Value
-	spectTBuf       js.Value
-	spectAPos       js.Value
-	spectATex       js.Value
-	spectUSampler   js.Value
-	spectUOffset    js.Value
-	spectReady      bool
-	spectTexCol     int
-	spectTexW       int
-	spectTexH       int
-	spectColUint8   js.Value // reused Uint8Array of length spectTexH*4
-	spectSampleBuf  []float32
-	spectMagnitudes []float64
+	spectProgram  js.Value
+	spectTexture  js.Value
+	spectVBuf     js.Value
+	spectTBuf     js.Value
+	spectAPos     js.Value
+	spectATex     js.Value
+	spectUSampler js.Value
+	spectUOffset  js.Value
+	spectReady    bool
+	spectTexCol   int
+	spectTexW     int
+	spectTexH     int
+	spectColUint8 js.Value // reused Uint8Array of length spectTexH*4
+
+	// Continuous-STFT state, matching audioprism-go: a sliding overlap
+	// window advanced sg.StepSize samples at a time (50% overlap at the
+	// default FFTSize=1024 / StepSize=512), fed by draining the audio
+	// source's continuous stream. spectAccum buffers samples until a full
+	// StepSize hop is available; spectDrainBuf is the per-frame drain
+	// scratch.
+	spectOverlap  []float32
+	spectAccum    []float32
+	spectDrainBuf []float32
+
+	// Column pipeline. FFT columns are produced sample-locked (bursty,
+	// since audio arrives in ~100ms chunks) into spectColQueue, then
+	// pushed to the texture at a steady wall-clock rate in flush — the
+	// decoupling that keeps the scroll smooth regardless of audio-burst
+	// timing or frame jitter (this is what audioprism-go does). Each
+	// queued column is spectTexH*4 RGBA bytes.
+	spectColQueue [][]byte
+	spectLastMs   float64 // rAF timestamp of previous flush
+	spectColFrac  float64 // fractional columns carried between frames
+)
+
+// spectMaxQueue caps the pending-column backlog so a burst or a hitch
+// can't grow it without bound; beyond it we fast-forward (drop) the
+// oldest columns down to spectQueueCatchup.
+const (
+	spectMaxQueue     = 120
+	spectQueueCatchup = 60
 )
 
 func initSpectrogram() {
@@ -110,7 +136,16 @@ func initSpectrogram() {
 	colAB := js.Global().Get("ArrayBuffer").New(spectTexH * 4)
 	spectColUint8 = js.Global().Get("Uint8Array").New(colAB)
 
-	spectSampleBuf = make([]float32, sg.FFTSize)
+	// The go-dsp FFT worker pool is pure overhead on single-threaded
+	// wasm (goroutines can't run in parallel here); pin it to serial.
+	sg.SetSingleThreaded()
+
+	spectOverlap = make([]float32, sg.FFTSize)
+	spectAccum = spectAccum[:0]
+	spectDrainBuf = make([]float32, 8192) // ≥ one frame's sample backlog
+	spectColQueue = spectColQueue[:0]
+	spectLastMs = 0
+	spectColFrac = 0
 	spectReady = true
 }
 
@@ -136,10 +171,15 @@ func teardownSpectrogram() {
 	spectProgram = js.Undefined()
 	spectReady = false
 	spectTexCol = 0
-	spectSampleBuf = nil
+	spectOverlap = nil
+	spectAccum = nil
+	spectDrainBuf = nil
+	spectColQueue = nil
+	spectLastMs = 0
+	spectColFrac = 0
 }
 
-func renderSpectrogramFrame() {
+func renderSpectrogramFrame(nowMs float64) {
 	if !spectReady {
 		initSpectrogram()
 	}
@@ -152,17 +192,40 @@ func renderSpectrogramFrame() {
 		initSpectrogram()
 	}
 
-	// Pull the most recent window from the mic and paint one column.
-	// This runs at rAF rate (~60Hz), not the natural spectrogram column
-	// rate (SampleRate/StepSize ≈ 23Hz at 24kHz). That gives slightly
-	// more visual detail per second than a strictly time-locked scroll,
-	// which is fine for a plumbing pass — a follow-up can add sample
-	// locking à la audioprism-go's queue.
+	// Produce FFT columns from the continuous sample stream, advancing
+	// the overlapping STFT one sg.StepSize hop at a time (same short-time
+	// FFT as audioprism-go). Columns are pushed to a queue here (bursty,
+	// matching audio arrival) and flushed to the texture at a steady
+	// wall-clock rate below, so the scroll never hitches.
 	if src != nil && src.Ready() {
-		src.TimeDomain(spectSampleBuf)
-		spectMagnitudes = sg.ComputeFFT(spectSampleBuf)
-		writeSpectColumn(spectMagnitudes)
+		for {
+			n := src.Drain(spectDrainBuf)
+			if n == 0 {
+				break
+			}
+			spectAccum = append(spectAccum, spectDrainBuf[:n]...)
+			if n < len(spectDrainBuf) {
+				break
+			}
+		}
+		step := sg.StepSize
+		consumed := 0
+		for len(spectAccum)-consumed >= step {
+			// Slide the window: drop the oldest StepSize, append the next
+			// StepSize. At 50% overlap FFTSize-StepSize == StepSize.
+			copy(spectOverlap, spectOverlap[step:])
+			copy(spectOverlap[sg.FFTSize-step:], spectAccum[consumed:consumed+step])
+			consumed += step
+			if col := buildSpectColumn(sg.ComputeFFT(spectOverlap)); col != nil {
+				spectColQueue = append(spectColQueue, col)
+			}
+		}
+		// Compact the sub-StepSize remainder back to the front, reusing
+		// the backing array so it doesn't drift/grow across frames.
+		spectAccum = append(spectAccum[:0], spectAccum[consumed:]...)
 	}
+
+	flushSpectColumns(nowMs)
 
 	gl.Call("useProgram", spectProgram)
 	gl.Call("disable", glTypes.DepthTest)
@@ -184,24 +247,78 @@ func renderSpectrogramFrame() {
 	gl.Call("drawArrays", gl.Get("TRIANGLE_STRIP"), 0, 4)
 }
 
-func writeSpectColumn(mags []float64) {
+// flushSpectColumns pushes queued columns onto the scrolling texture at
+// the audio column rate (SampleRate/StepSize per second), paced by
+// wall-clock time rather than frame or burst timing. Any backlog beyond
+// spectMaxQueue is fast-forwarded so we never fall permanently behind.
+func flushSpectColumns(nowMs float64) {
+	if spectLastMs == 0 {
+		spectLastMs = nowMs
+	}
+	elapsed := nowMs - spectLastMs
+	spectLastMs = nowMs
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
+	sampleRate := 24000
+	if audioSource != nil && audioSource.SampleRate() > 0 {
+		sampleRate = audioSource.SampleRate()
+	}
+	colsPerMs := float64(sampleRate) / float64(sg.StepSize) / 1000.0
+
+	spectColFrac += elapsed * colsPerMs
+	toFlush := int(spectColFrac)
+	spectColFrac -= float64(toFlush)
+
+	for i := 0; i < toFlush && len(spectColQueue) > 0; i++ {
+		uploadSpectColumn(spectColQueue[0])
+		spectColQueue = spectColQueue[1:]
+	}
+	// Fell too far behind (tab was hidden, GC hitch, …): drop oldest.
+	if len(spectColQueue) > spectMaxQueue {
+		drop := len(spectColQueue) - spectQueueCatchup
+		for i := 0; i < drop; i++ {
+			uploadSpectColumn(spectColQueue[i])
+		}
+		spectColQueue = spectColQueue[drop:]
+	}
+	// Reset the backing slice when drained so it doesn't creep forward.
+	if len(spectColQueue) == 0 {
+		spectColQueue = spectColQueue[:0]
+	}
+}
+
+// uploadSpectColumn writes one prepared RGBA column to the current write
+// position and advances the scroll cursor.
+func uploadSpectColumn(col []byte) {
+	js.CopyBytesToJS(spectColUint8, col)
+	gl.Call("bindTexture", gl.Get("TEXTURE_2D"), spectTexture)
+	gl.Call("texSubImage2D",
+		gl.Get("TEXTURE_2D"), 0,
+		spectTexCol, 0, 1, spectTexH,
+		gl.Get("RGBA"), gl.Get("UNSIGNED_BYTE"), spectColUint8)
+	spectTexCol = (spectTexCol + 1) % spectTexW
+}
+
+// buildSpectColumn maps FFT magnitudes to one RGBA texture column
+// (spectTexH*4 bytes), full 0..Nyquist band with 0 Hz at the bottom
+// (texcoord v=0 is the bottom edge) — matching audioprism-go's mapping.
+func buildSpectColumn(mags []float64) []byte {
 	if len(mags) == 0 || spectTexH == 0 {
-		return
+		return nil
 	}
 	col := make([]byte, spectTexH*4)
 	sampleRate := 24000
 	if audioSource != nil && audioSource.SampleRate() > 0 {
 		sampleRate = audioSource.SampleRate()
 	}
-	// Display band: 0 to sampleRate/4 (up to Nyquist/2 so low freqs are
-	// legible). Callers wanting the full band can adjust this later.
-	maxFreq := float64(sampleRate) / 4.0
+	maxFreq := float64(sampleRate) / 2.0
 	for y := 0; y < spectTexH; y++ {
-		// Flip Y so low freqs are at the bottom (image y=0 is top).
-		yFlipped := spectTexH - 1 - y
-		freq := float64(yFlipped) / float64(spectTexH) * maxFreq
+		freq := float64(y) / float64(spectTexH) * maxFreq
 		bin := int(freq * float64(sg.FFTSize) / float64(sampleRate))
 		if bin < 0 || bin >= len(mags) {
+			col[y*4+3] = 255
 			continue
 		}
 		c := sg.MagnitudeToPixel(mags[bin])
@@ -211,11 +328,5 @@ func writeSpectColumn(mags []float64) {
 		col[y*4+2] = byte(b >> 8)
 		col[y*4+3] = byte(a >> 8)
 	}
-	js.CopyBytesToJS(spectColUint8, col)
-	gl.Call("bindTexture", gl.Get("TEXTURE_2D"), spectTexture)
-	gl.Call("texSubImage2D",
-		gl.Get("TEXTURE_2D"), 0,
-		spectTexCol, 0, 1, spectTexH,
-		gl.Get("RGBA"), gl.Get("UNSIGNED_BYTE"), spectColUint8)
-	spectTexCol = (spectTexCol + 1) % spectTexW
+	return col
 }

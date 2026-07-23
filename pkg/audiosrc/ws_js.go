@@ -22,9 +22,9 @@ type WSOptions struct {
 	// no rate, so the consumer has to be told. Default 24000.
 	SampleRate int
 
-	// RingSize is the number of samples retained for TimeDomain
-	// snapshots. Must comfortably exceed the largest window a consumer
-	// asks for (FFT size). Default 8192.
+	// RingSize is the number of samples retained. Must exceed the largest
+	// window a consumer snapshots (FFT size) and the largest per-frame
+	// drain backlog. Default 16384.
 	RingSize int
 }
 
@@ -33,8 +33,9 @@ type WSOptions struct {
 // exact wire format produced by audioprism-go's /ws handler
 // (float32SliceToBase64String). The connection is opened immediately and
 // re-established automatically 2s after any drop. Samples land in a ring
-// buffer that TimeDomain snapshots the tail of, so the render loop stays
-// on the same pull-based contract as the mic Source.
+// buffer that TimeDomain snapshots and Drain consumes, so both the
+// pull-latest (xy scope) and continuous-stream (spectrogram STFT) callers
+// are served.
 //
 // The stream is mono (the server records a single channel); Channels()
 // reports 1 and TimeDomainStereo copies the one channel to both outputs.
@@ -43,13 +44,10 @@ func NewWebSocket(opts WSOptions) Source {
 		opts.SampleRate = 24000
 	}
 	if opts.RingSize == 0 {
-		opts.RingSize = 8192
+		opts.RingSize = 16384
 	}
-	w := &wsSource{
-		opts: opts,
-		ring: make([]float32, opts.RingSize),
-	}
-	if wsCtor := js.Global().Get("WebSocket"); wsCtor.IsUndefined() {
+	w := &wsSource{opts: opts, ring: newRing(opts.RingSize)}
+	if js.Global().Get("WebSocket").IsUndefined() {
 		w.err = errors.New("WebSocket not supported in this browser")
 		return w
 	}
@@ -57,7 +55,6 @@ func NewWebSocket(opts WSOptions) Source {
 	if w.url == "" {
 		w.url = sameOriginWSURL()
 	}
-	// Reuse one message handler across reconnects (matches audioprism-go).
 	w.onMsg = js.FuncOf(w.handleMessage)
 	w.connect()
 	return w
@@ -79,15 +76,7 @@ type wsSource struct {
 	url   string
 	ws    js.Value
 	onMsg js.Func
-
-	// ring is a fixed-size circular buffer of the most recent samples.
-	// head is the index the next sample will be written to; filled counts
-	// how many valid samples exist (caps at len(ring)). Reads and writes
-	// both happen on the JS main thread (wasm is single-threaded, all JS
-	// callbacks are serialized), so no locking is needed.
-	ring   []float32
-	head   int
-	filled int
+	ring  *ring
 
 	reconnecting bool
 	ready        bool
@@ -115,8 +104,6 @@ func (w *wsSource) connect() {
 		return nil
 	}))
 	ws.Call("addEventListener", "error", js.FuncOf(func(js.Value, []js.Value) interface{} {
-		// A close event follows an error and drives the reconnect; here we
-		// only surface a message for the status overlay.
 		if w.err == nil {
 			w.err = errors.New("websocket error connecting to " + w.url)
 		}
@@ -137,9 +124,8 @@ func (w *wsSource) scheduleReconnect(delayMs int) {
 	}), delayMs)
 }
 
-// handleMessage decodes one base64 float32 chunk and pushes it into the
-// ring. Bytes are little-endian, four per sample — the inverse of the
-// server's float32SliceToBase64String.
+// handleMessage decodes one base64 float32 chunk (little-endian, four
+// bytes per sample — the inverse of the server's encoder) into the ring.
 func (w *wsSource) handleMessage(_ js.Value, p []js.Value) interface{} {
 	if len(p) == 0 {
 		return nil
@@ -153,38 +139,17 @@ func (w *wsSource) handleMessage(_ js.Value, p []js.Value) interface{} {
 		return nil
 	}
 	n := len(b) / 4
+	if n == 0 {
+		return nil
+	}
+	samples := make([]float32, n)
 	for i := 0; i < n; i++ {
 		bits := uint32(b[i*4]) | uint32(b[i*4+1])<<8 | uint32(b[i*4+2])<<16 | uint32(b[i*4+3])<<24
-		w.ring[w.head] = math.Float32frombits(bits)
-		w.head++
-		if w.head == len(w.ring) {
-			w.head = 0
-		}
-		if w.filled < len(w.ring) {
-			w.filled++
-		}
+		samples[i] = math.Float32frombits(bits)
 	}
-	if n > 0 {
-		w.ready = true
-	}
+	w.ring.write(samples)
+	w.ready = true
 	return nil
-}
-
-// snapshot copies the most recent len(dst) samples into dst, oldest
-// first. Slots with no data yet read as the ring's zero value, so an
-// under-filled buffer leads with silence rather than garbage.
-func (w *wsSource) snapshot(dst []float32) {
-	size := len(w.ring)
-	n := len(dst)
-	start := w.head - n
-	for i := 0; i < n; i++ {
-		idx := start + i
-		idx %= size
-		if idx < 0 {
-			idx += size
-		}
-		dst[i] = w.ring[idx]
-	}
 }
 
 func (w *wsSource) TimeDomain(dst []float32) []float32 {
@@ -194,7 +159,7 @@ func (w *wsSource) TimeDomain(dst []float32) []float32 {
 		}
 		return dst
 	}
-	w.snapshot(dst)
+	w.ring.latest(dst)
 	return dst
 }
 
@@ -204,6 +169,13 @@ func (w *wsSource) TimeDomainStereo(l, r []float32) {
 	}
 	w.TimeDomain(l)
 	copy(r, l) // mono stream: right mirrors left
+}
+
+func (w *wsSource) Drain(dst []float32) int {
+	if !w.ready {
+		return 0
+	}
+	return w.ring.drain(dst)
 }
 
 func (w *wsSource) SampleRate() int { return w.opts.SampleRate }

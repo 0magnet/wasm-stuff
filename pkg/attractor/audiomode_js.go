@@ -16,10 +16,10 @@ import (
 // CPU work, just an idle AudioContext.
 
 var (
-	audioSource     audiosrc.Source
+	audioSource      audiosrc.Source
 	audioSourceTried bool
-	audioModeActive bool // last frame we rendered an audio mode
-	audioOverlay    js.Value
+	audioModeActive  bool // last frame we rendered an audio mode
+	audioOverlay     js.Value
 )
 
 // ensureAudioSource returns the shared audio source, creating it on first
@@ -48,8 +48,7 @@ func ensureAudioSource() audiosrc.Source {
 		})
 	default:
 		audioSource = audiosrc.NewMic(audiosrc.MicOptions{
-			FFTSize: 2048,
-			Stereo:  true,
+			Stereo: true,
 		})
 	}
 	return audioSource
@@ -81,11 +80,13 @@ func isAudioMode(mode string) bool {
 }
 
 // renderAudioFrame dispatches to the current audio mode's renderer.
-// Called from renderLoop when isAudioMode(selectedMode) is true.
-func renderAudioFrame(mode string) {
+// Called from renderLoop when isAudioMode(selectedMode) is true. nowMs is
+// the requestAnimationFrame timestamp, used to pace the spectrogram's
+// scroll by wall-clock time.
+func renderAudioFrame(mode string, nowMs float64) {
 	switch mode {
 	case "spectrogram":
-		renderSpectrogramFrame()
+		renderSpectrogramFrame(nowMs)
 	case "xy":
 		renderXYFrame()
 	}

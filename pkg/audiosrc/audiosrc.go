@@ -32,6 +32,17 @@ type Source interface {
 	// a lag). Not Ready → both zeroed.
 	TimeDomainStereo(l, r []float32)
 
+	// Drain copies the samples from the primary channel that have
+	// arrived since the previous Drain call into dst (oldest first) and
+	// returns the number copied (≤ len(dst)). Unlike TimeDomain, which
+	// re-snapshots the latest window every call, Drain hands each sample
+	// to the caller exactly once — the continuous stream a proper
+	// overlapping STFT needs. If more than len(dst) samples arrived
+	// since the last call, only the most recent len(dst) survive (older
+	// ones are dropped, so call with a generous dst each frame). Not
+	// Ready → returns 0.
+	Drain(dst []float32) int
+
 	// SampleRate returns the underlying AudioContext's sampleRate in
 	// Hz (typically 44100 or 48000). Returns 0 before the context is
 	// established.
@@ -55,4 +66,60 @@ type Source interface {
 	// disconnects AudioNodes, closes WebSockets. Safe to call multiple
 	// times or before Ready.
 	Close()
+}
+
+// ring is a fixed-capacity circular sample buffer shared by the source
+// implementations. It is pure Go (no syscall/js) so it lives here rather
+// than in a build-tagged file. All access happens on the single JS main
+// thread (wasm is single-threaded; audio callbacks and the render loop
+// never overlap), so no synchronization is needed.
+type ring struct {
+	buf        []float32
+	writeTotal int // monotonic count of samples ever written
+	readTotal  int // monotonic count consumed by drain
+}
+
+func newRing(size int) *ring { return &ring{buf: make([]float32, size)} }
+
+// write appends samples, overwriting the oldest once full.
+func (r *ring) write(s []float32) {
+	n := len(r.buf)
+	for _, v := range s {
+		r.buf[r.writeTotal%n] = v
+		r.writeTotal++
+	}
+}
+
+// latest fills dst with the most recent len(dst) samples, oldest first.
+// Positions with no data yet (early startup) read as 0.
+func (r *ring) latest(dst []float32) {
+	size := len(r.buf)
+	n := len(dst)
+	for i := 0; i < n; i++ {
+		idx := r.writeTotal - n + i
+		if idx < 0 {
+			dst[i] = 0
+			continue
+		}
+		dst[i] = r.buf[idx%size]
+	}
+}
+
+// drain copies samples written since the previous drain into dst (oldest
+// first) and returns the count. If the backlog exceeds the ring capacity,
+// the oldest unread samples are discarded before copying.
+func (r *ring) drain(dst []float32) int {
+	size := len(r.buf)
+	if r.writeTotal-r.readTotal > size {
+		r.readTotal = r.writeTotal - size
+	}
+	n := r.writeTotal - r.readTotal
+	if n > len(dst) {
+		n = len(dst)
+	}
+	for i := 0; i < n; i++ {
+		dst[i] = r.buf[(r.readTotal+i)%size]
+	}
+	r.readTotal += n
+	return n
 }

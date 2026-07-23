@@ -10,31 +10,40 @@ import (
 
 // MicOptions configures a microphone Source.
 type MicOptions struct {
-	// FFTSize is the AnalyserNode's fftSize (must be a power of two
-	// between 32 and 32768). It sets the window of samples snapshotted
-	// per TimeDomain call. Default 2048 (~43 ms at 48 kHz).
-	FFTSize int
-
-	// Stereo requests a two-channel MediaStream. Falls back to mono if
-	// the device or browser only exposes one channel; check Channels()
-	// after Ready to know what you actually got.
+	// Stereo requests a two-channel capture. Falls back to mono if the
+	// device or browser only exposes one channel; check Channels() after
+	// Ready to know what you actually got.
 	Stereo bool
+
+	// BufferSize is the ScriptProcessorNode buffer size in sample frames
+	// (a power of two, 256..16384). Larger = fewer callbacks but more
+	// latency. Default 4096.
+	BufferSize int
+
+	// RingSize is the number of samples retained per channel. Must exceed
+	// the largest snapshot window and per-frame drain backlog. Default
+	// 16384.
+	RingSize int
 }
 
-// NewMic requests microphone access via navigator.mediaDevices.getUserMedia
-// and returns a Source that reports samples via AnalyserNode(s) hanging off
-// the resulting MediaStream. The call returns immediately; permission grant
-// and audio graph setup happen asynchronously — poll Ready()/Err() from the
-// render loop.
+// NewMic requests microphone access via getUserMedia and captures the
+// continuous sample stream with a ScriptProcessorNode whose onaudioprocess
+// callback runs in Go (no separate JS worklet module — keeps everything in
+// wasm). Samples flow into per-channel ring buffers that serve both
+// TimeDomain (latest window, e.g. xy scope) and Drain (continuous stream
+// for the overlapping STFT spectrogram).
 //
 // getUserMedia requires a secure context (https or localhost). On file://
-// or plain http:// LAN pages, Err() will be set once the browser refuses.
-// Callers should render a fallback (e.g. a "Click to enable mic" overlay).
+// or plain http:// LAN pages, Err() is set once the browser refuses;
+// callers should render a fallback.
 func NewMic(opts MicOptions) Source {
-	if opts.FFTSize == 0 {
-		opts.FFTSize = 2048
+	if opts.BufferSize == 0 {
+		opts.BufferSize = 4096
 	}
-	m := &micSource{opts: opts}
+	if opts.RingSize == 0 {
+		opts.RingSize = 16384
+	}
+	m := &micSource{opts: opts, ringL: newRing(opts.RingSize)}
 	nav := js.Global().Get("navigator")
 	if nav.IsUndefined() || nav.Get("mediaDevices").IsUndefined() {
 		m.err = errors.New("navigator.mediaDevices unavailable (need https or localhost)")
@@ -61,9 +70,6 @@ func boolTernary(b bool, t, f int) int {
 	return f
 }
 
-// micSource holds the audio graph nodes and per-channel JS Float32Array
-// buffers. Buffers are allocated once and reused every TimeDomain call to
-// keep the render loop off the GC path.
 type micSource struct {
 	opts MicOptions
 	err  error
@@ -71,20 +77,15 @@ type micSource struct {
 	stream    js.Value
 	audioCtx  js.Value
 	src       js.Value // MediaStreamAudioSourceNode
-	splitter  js.Value // ChannelSplitterNode (stereo only)
-	analyserL js.Value
-	analyserR js.Value // undefined when mono
+	processor js.Value // ScriptProcessorNode
+	onProcess js.Func
 
-	jsBufL js.Value // Float32Array of length opts.FFTSize
-	jsBufR js.Value
+	ringL *ring
+	ringR *ring // nil when mono
 
-	// scratchU8 is a Uint8Array view onto the ArrayBuffer backing jsBufL
-	// (and separately jsBufR). CopyBytesToGo copies bytes from JS to Go
-	// in one call; we reinterpret the bytes as float32 via unsafe.
-	scratchU8L js.Value
-	scratchU8R js.Value
-	byteBufL   []byte
-	byteBufR   []byte
+	// Scratch reused every callback to move a channel's Float32Array into
+	// Go without per-sample JS round-trips.
+	byteScratch []byte
 
 	sampleRate int
 	channels   int
@@ -112,48 +113,66 @@ func (m *micSource) onStream(_ js.Value, args []js.Value) interface{} {
 	}
 	m.audioCtx = ac.New()
 	m.sampleRate = m.audioCtx.Get("sampleRate").Int()
-
 	m.src = m.audioCtx.Call("createMediaStreamSource", m.stream)
 
-	// Detect actual channel count from the stream's audio track.
+	// Detect the real channel count from the track.
 	tracks := m.stream.Call("getAudioTracks")
 	if tracks.Length() > 0 {
-		settings := tracks.Index(0).Call("getSettings")
-		if v := settings.Get("channelCount"); !v.IsUndefined() {
+		if v := tracks.Index(0).Call("getSettings").Get("channelCount"); !v.IsUndefined() {
 			m.channels = v.Int()
 		}
 	}
 	if m.channels == 0 {
 		m.channels = 1
 	}
-
-	m.analyserL = m.audioCtx.Call("createAnalyser")
-	m.analyserL.Set("fftSize", m.opts.FFTSize)
-	m.analyserL.Set("smoothingTimeConstant", 0)
-
 	if m.channels >= 2 {
-		m.splitter = m.audioCtx.Call("createChannelSplitter", 2)
-		m.src.Call("connect", m.splitter)
-		m.splitter.Call("connect", m.analyserL, 0)
-		m.analyserR = m.audioCtx.Call("createAnalyser")
-		m.analyserR.Set("fftSize", m.opts.FFTSize)
-		m.analyserR.Set("smoothingTimeConstant", 0)
-		m.splitter.Call("connect", m.analyserR, 1)
-	} else {
-		m.src.Call("connect", m.analyserL)
+		m.ringR = newRing(m.opts.RingSize)
 	}
 
-	m.jsBufL = js.Global().Get("Float32Array").New(m.opts.FFTSize)
-	m.scratchU8L = js.Global().Get("Uint8Array").New(m.jsBufL.Get("buffer"))
-	m.byteBufL = make([]byte, m.opts.FFTSize*4)
-	if m.channels >= 2 {
-		m.jsBufR = js.Global().Get("Float32Array").New(m.opts.FFTSize)
-		m.scratchU8R = js.Global().Get("Uint8Array").New(m.jsBufR.Get("buffer"))
-		m.byteBufR = make([]byte, m.opts.FFTSize*4)
-	}
+	m.byteScratch = make([]byte, m.opts.BufferSize*4)
+
+	// ScriptProcessorNode: deprecated but universally supported and — key
+	// for the no-JS-worklet constraint — its callback runs here in Go.
+	m.processor = m.audioCtx.Call("createScriptProcessor", m.opts.BufferSize, m.channels, 1)
+	m.onProcess = js.FuncOf(m.handleProcess)
+	m.processor.Set("onaudioprocess", m.onProcess)
+	m.src.Call("connect", m.processor)
+	// Must reach the destination for onaudioprocess to fire. We never
+	// write the output buffer, so it stays silent (no mic→speaker echo).
+	m.processor.Call("connect", m.audioCtx.Get("destination"))
 
 	m.ready = true
 	return nil
+}
+
+// handleProcess pulls one buffer of input samples per channel into the
+// rings. Runs on the JS main thread, serialized with the render loop.
+func (m *micSource) handleProcess(_ js.Value, args []js.Value) interface{} {
+	if m.closed || len(args) == 0 {
+		return nil
+	}
+	inBuf := args[0].Get("inputBuffer")
+	m.pullChannel(inBuf, 0, m.ringL)
+	if m.ringR != nil {
+		m.pullChannel(inBuf, 1, m.ringR)
+	}
+	return nil
+}
+
+func (m *micSource) pullChannel(inBuf js.Value, ch int, r *ring) {
+	data := inBuf.Call("getChannelData", ch) // Float32Array
+	n := data.Get("length").Int()
+	byteLen := n * 4
+	if byteLen > len(m.byteScratch) {
+		byteLen = len(m.byteScratch)
+		n = byteLen / 4
+	}
+	u8 := js.Global().Get("Uint8Array").New(data.Get("buffer"))
+	js.CopyBytesToGo(m.byteScratch[:byteLen], u8)
+	// Reinterpret the little-endian bytes as float32 (host-native order on
+	// wasm is little-endian, matching Float32Array's layout).
+	samples := unsafe.Slice((*float32)(unsafe.Pointer(&m.byteScratch[0])), n)
+	r.write(samples)
 }
 
 func (m *micSource) onError(_ js.Value, args []js.Value) interface{} {
@@ -174,7 +193,7 @@ func (m *micSource) TimeDomain(dst []float32) []float32 {
 		}
 		return dst
 	}
-	m.readAnalyser(m.analyserL, m.jsBufL, m.scratchU8L, m.byteBufL, dst)
+	m.ringL.latest(dst)
 	return dst
 }
 
@@ -189,38 +208,19 @@ func (m *micSource) TimeDomainStereo(l, r []float32) {
 		}
 		return
 	}
-	m.readAnalyser(m.analyserL, m.jsBufL, m.scratchU8L, m.byteBufL, l)
-	if m.channels >= 2 {
-		m.readAnalyser(m.analyserR, m.jsBufR, m.scratchU8R, m.byteBufR, r)
+	m.ringL.latest(l)
+	if m.ringR != nil {
+		m.ringR.latest(r)
 	} else {
 		copy(r, l)
 	}
 }
 
-// readAnalyser pulls the AnalyserNode's most-recent-samples window into the
-// supplied JS Float32Array, then copies its bytes into a Go slice we
-// reinterpret as float32. The fftSize we set at creation determines how
-// many samples the buffer holds; if the caller wants fewer we truncate,
-// more and we zero-fill the tail.
-func (m *micSource) readAnalyser(analyser, jsBuf, jsU8 js.Value, byteBuf []byte, out []float32) {
-	analyser.Call("getFloatTimeDomainData", jsBuf)
-	js.CopyBytesToGo(byteBuf, jsU8)
-	// Reinterpret the byte buffer as []float32. Same length in floats as
-	// the JS Float32Array we allocated (opts.FFTSize). Native byte order
-	// on wasm is little-endian; Float32Array is host-native, so no swap.
-	src := unsafe.Slice((*float32)(unsafe.Pointer(&byteBuf[0])), len(byteBuf)/4)
-	n := len(out)
-	if n > len(src) {
-		copy(out, src)
-		for i := len(src); i < n; i++ {
-			out[i] = 0
-		}
-		return
+func (m *micSource) Drain(dst []float32) int {
+	if !m.ready {
+		return 0
 	}
-	// Take the last n samples so callers requesting a window smaller
-	// than the FFTSize get the most recent audio (AnalyserNode fills
-	// the buffer with the most recent fftSize samples, oldest first).
-	copy(out, src[len(src)-n:])
+	return m.ringL.drain(dst)
 }
 
 func (m *micSource) SampleRate() int { return m.sampleRate }
@@ -233,11 +233,21 @@ func (m *micSource) Close() {
 		return
 	}
 	m.closed = true
+	if !m.processor.IsUndefined() {
+		m.processor.Call("disconnect")
+		m.processor.Set("onaudioprocess", js.Null())
+	}
+	if !m.src.IsUndefined() {
+		m.src.Call("disconnect")
+	}
 	if !m.stream.IsUndefined() {
 		stopTracks(m.stream)
 	}
 	if !m.audioCtx.IsUndefined() {
 		m.audioCtx.Call("close")
+	}
+	if m.onProcess.Truthy() {
+		m.onProcess.Release()
 	}
 }
 
