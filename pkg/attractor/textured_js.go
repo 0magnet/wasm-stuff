@@ -156,3 +156,28 @@ func drawTexturedPlane(texture js.Value, offset float32) {
 
 	gl.Call("drawArrays", gl.Get("TRIANGLE_STRIP"), 0, 4)
 }
+
+// drawTexturedMesh draws an indexed triangle mesh (interleaved pos+uv,
+// stride 20) with the given texture and scroll offset through texProgram,
+// so it shares the camera/rotation state. Used for the spectrogram skin
+// on surface models.
+func drawTexturedMesh(vertBuf, idxBuf js.Value, idxCount int, texture js.Value, offset float32) {
+	if !texReady || idxCount == 0 {
+		return
+	}
+	useTexProgram()
+
+	gl.Call("bindBuffer", glTypes.ArrayBuffer, vertBuf)
+	gl.Call("vertexAttribPointer", texPosLoc, 3, glTypes.Float, false, 20, 0)
+	gl.Call("enableVertexAttribArray", texPosLoc)
+	gl.Call("vertexAttribPointer", texUVLoc, 2, glTypes.Float, false, 20, 12)
+	gl.Call("enableVertexAttribArray", texUVLoc)
+	gl.Call("bindBuffer", glTypes.ElementArrayBuffer, idxBuf)
+
+	gl.Call("activeTexture", gl.Get("TEXTURE0"))
+	gl.Call("bindTexture", gl.Get("TEXTURE_2D"), texture)
+	gl.Call("uniform1i", texUSamplerLoc, 0)
+	gl.Call("uniform1f", texUOffsetLoc, float64(offset))
+
+	gl.Call("drawElements", gl.Get("TRIANGLES"), idxCount, glTypes.UnsignedShort, 0)
+}

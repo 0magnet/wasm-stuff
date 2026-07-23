@@ -364,6 +364,7 @@ const controlsHTML = `
   <span id="extra-nav" style="margin-left:8px;"></span>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="spectro-skin"> Spectrogram skin</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
   <button id="pause-btn" class="ctrl-btn">Pause</button>
   <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
@@ -565,6 +566,15 @@ func Run() {
 	// Event: auto-rotate checkbox
 	doc.Call("getElementById", "auto-rotate").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		autoRotate = doc.Call("getElementById", "auto-rotate").Get("checked").Bool()
+		return nil
+	}))
+
+	// Event: spectrogram-skin checkbox — paint the live spectrogram onto
+	// the current surface model (sphere/globe/torus).
+	doc.Call("getElementById", "spectro-skin").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		spectroSkin = doc.Call("getElementById", "spectro-skin").Get("checked").Bool()
+		skinDirty = true
+		generateForMode(selectedMode)
 		return nil
 	}))
 
@@ -1560,8 +1570,9 @@ func onModeChange(this js.Value, args []js.Value) interface{} {
 		selectedMode = sel.Get("value").String()
 	}
 	// New mode means fresh geometry — force an upload on the next
-	// uploadBuffersIndexed for static modes.
+	// uploadBuffersIndexed for static modes, and a skin-mesh rebuild.
 	staticGeomDirty = true
+	skinDirty = true
 	resetAttractorState()
 	buildParamPanel(selectedMode)
 	updateInfoOverlay()

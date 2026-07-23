@@ -230,6 +230,12 @@ func generateForMode(mode string) {
 		renderSpectrogramMode(frameNowMs)
 		return
 	}
+	// Spectrogram skin: paint the live texture onto a surface model
+	// instead of its wireframe, drawn through the same textured pipeline.
+	if spectroSkin && isSkinnable(mode) {
+		renderSkinnedMode(mode, frameNowMs)
+		return
+	}
 	// xy scope draws on its own 2D program via renderAudioFrame; skip the
 	// attractor pipeline entirely. This path is still reached via
 	// onModeChange / buildParamPanel / paused-frame redraw, so a plain
