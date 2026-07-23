@@ -28,9 +28,9 @@ var (
 // ── Attractor state ──────────────────────────────────────────────────────────
 
 var (
-	x, y, z   float32 = 0.1, 0.5, -0.6
-	steps      int = 20000
-	vertBuf        = make([]float32, 20000*4) // pre-allocated vertex buffer (stride 4: x,y,z,t)
+	x, y, z    float32 = 0.1, 0.5, -0.6
+	steps      int     = 20000
+	vertBuf            = make([]float32, 20000*4) // pre-allocated vertex buffer (stride 4: x,y,z,t)
 	speedSteps int     = 1
 	speedScale float32 = 1.0 // dt multiplier for sub-1 speeds
 	// centerOffset is computed after warmup frames and then held stable
@@ -44,15 +44,15 @@ var attractorDrawMode js.Value
 
 // Persistent JS typed arrays — allocated once, reused every frame to avoid GC pressure.
 var (
-	jsVertUint8  js.Value // Uint8Array for CopyBytesToJS
-	jsVertFloat  js.Value // Float32Array view for bufferData
+	jsVertUint8 js.Value // Uint8Array for CopyBytesToJS
+	jsVertFloat js.Value // Float32Array view for bufferData
 )
 
 // ── Camera / view state ──────────────────────────────────────────────────────
 
 var (
-	initCameraDist    float32 = 100
-	defaultCameraDist float32 = 100
+	initCameraDist                     float32 = 100
+	defaultCameraDist                  float32 = 100
 	rotationX, rotationY, rotationZ    float32
 	rotationX1, rotationY1, rotationZ1 float32
 	movMatrix                          mgl32.Mat4
@@ -189,20 +189,20 @@ func initWebGL() {
 // ── DOM element refs ─────────────────────────────────────────────────────────
 
 var (
-	rtc               js.Value
-	cameraControl     js.Value
-	rotationControlsX js.Value
-	rotationControlsY js.Value
-	rotationControlsZ js.Value
-	sliderZoom        js.Value
-	sliderX           js.Value
-	sliderY           js.Value
-	sliderZ           js.Value
-	uBaseColorLoc     js.Value
-	uTopColorLoc      js.Value
-	uMidColorLoc      js.Value
-	uMinZLoc          js.Value
-	uMaxZLoc          js.Value
+	rtc                 js.Value
+	cameraControl       js.Value
+	rotationControlsX   js.Value
+	rotationControlsY   js.Value
+	rotationControlsZ   js.Value
+	sliderZoom          js.Value
+	sliderX             js.Value
+	sliderY             js.Value
+	sliderZ             js.Value
+	uBaseColorLoc       js.Value
+	uTopColorLoc        js.Value
+	uMidColorLoc        js.Value
+	uMinZLoc            js.Value
+	uMaxZLoc            js.Value
 	uMinXLoc            js.Value
 	uMaxXLoc            js.Value
 	uMinYLoc            js.Value
@@ -212,7 +212,7 @@ var (
 	positionLoc         js.Value
 	aTrailTLoc          js.Value
 	shadersReady        bool
-	renderFrame       js.Func
+	renderFrame         js.Func
 )
 
 // ── Parameter definitions with slider ranges ─────────────────────────────────
@@ -897,9 +897,14 @@ func Run() {
 	gl.Call("bindBuffer", glTypes.ArrayBuffer, attractorVertexBuffer)
 	gl.Call("bindBuffer", glTypes.ElementArrayBuffer, attractorIndexBuffer)
 	setupShaders()
+	setupTexShaders()
 	setupMatrices()
 	generateForMode(selectedMode)
-	autoFitCamera()
+	if selectedMode == "spectrogram" {
+		setSpectrogramCamera()
+	} else {
+		autoFitCamera()
+	}
 	refreshGradient()
 
 	// Check if debug mode is enabled via JS global
@@ -1002,6 +1007,12 @@ func Run() {
 	// doesn't start in the same pose every load. Must run AFTER the
 	// rotation-controls-x/y/z elements are created and queried.
 	randomizeOrientation()
+	// The spectrogram wants a static, face-on default instead — undo the
+	// randomized pose/spin for an initial #spectrogram load (mode switches
+	// go through onModeChange, which already handles this).
+	if selectedMode == "spectrogram" {
+		setSpectrogramCamera()
+	}
 
 	// Wheel-on-input: scroll over a range/number input adjusts its
 	// value by `step` instead of scrolling the host page. Fires the
@@ -1234,16 +1245,16 @@ var attractorDescriptions = map[string]string{
 	"burkeshaw": "Burke-Shaw Attractor — Introduced by Bill Burke and Robert Shaw, this system exhibits chaotic behavior with a distinctive two-winged structure. " +
 		"It arises from the study of nonlinear dynamics and produces complex trajectories confined to a compact region of phase space.\n\n" +
 		"dx/dt = −S(x + y)\ndy/dt = −y − Sxz\ndz/dt = Sxy + V",
-	"tetrahedron":    "Tetrahedron — The simplest Platonic solid, with 4 triangular faces, 6 edges, and 4 vertices. It is its own dual.",
-	"cube":           "Cube (Hexahedron) — A Platonic solid with 6 square faces, 12 edges, and 8 vertices. Its dual is the octahedron.",
-	"octahedron":     "Octahedron — A Platonic solid with 8 triangular faces, 12 edges, and 6 vertices. Its dual is the cube.",
-	"dodecahedron":   "Dodecahedron — A Platonic solid with 12 pentagonal faces, 30 edges, and 20 vertices. Its dual is the icosahedron.",
-	"icosahedron":    "Icosahedron — A Platonic solid with 20 triangular faces, 30 edges, and 12 vertices. Its dual is the dodecahedron.",
-	"nestedcube":     "Nested Cube — A cube within a cube, connected at the vertices, illustrating the relationship between inner and outer geometric structures.",
-	"globe":          "Globe — A wireframe sphere showing lines of latitude and longitude, similar to the graticule on a geographic globe. Latitude lines are horizontal circles parallel to the equator, longitude lines are great circles passing through the poles.",
-	"sphere":         "Sphere — A perfectly round three-dimensional surface where every point is equidistant from the center. Generated as a UV sphere with configurable latitude and longitude subdivisions.",
-	"torus":          "Torus — A doughnut-shaped surface of revolution generated by revolving a circle (radius r) around an axis at distance R from the center of the circle.",
-	"magnetosphere":  "Magnetosphere — A visualization of magnetic field lines surrounding a dipole, similar to Earth's magnetosphere that shields the planet from solar wind.",
+	"tetrahedron":   "Tetrahedron — The simplest Platonic solid, with 4 triangular faces, 6 edges, and 4 vertices. It is its own dual.",
+	"cube":          "Cube (Hexahedron) — A Platonic solid with 6 square faces, 12 edges, and 8 vertices. Its dual is the octahedron.",
+	"octahedron":    "Octahedron — A Platonic solid with 8 triangular faces, 12 edges, and 6 vertices. Its dual is the cube.",
+	"dodecahedron":  "Dodecahedron — A Platonic solid with 12 pentagonal faces, 30 edges, and 20 vertices. Its dual is the icosahedron.",
+	"icosahedron":   "Icosahedron — A Platonic solid with 20 triangular faces, 30 edges, and 12 vertices. Its dual is the dodecahedron.",
+	"nestedcube":    "Nested Cube — A cube within a cube, connected at the vertices, illustrating the relationship between inner and outer geometric structures.",
+	"globe":         "Globe — A wireframe sphere showing lines of latitude and longitude, similar to the graticule on a geographic globe. Latitude lines are horizontal circles parallel to the equator, longitude lines are great circles passing through the poles.",
+	"sphere":        "Sphere — A perfectly round three-dimensional surface where every point is equidistant from the center. Generated as a UV sphere with configurable latitude and longitude subdivisions.",
+	"torus":         "Torus — A doughnut-shaped surface of revolution generated by revolving a circle (radius r) around an axis at distance R from the center of the circle.",
+	"magnetosphere": "Magnetosphere — A visualization of magnetic field lines surrounding a dipole, similar to Earth's magnetosphere that shields the planet from solar wind.",
 }
 
 func resetAttractorState() {
@@ -1559,7 +1570,12 @@ func onModeChange(this js.Value, args []js.Value) interface{} {
 	js.Global().Get("location").Set("hash", selectedMode)
 	// Run one frame to populate vertices, then update gradient and fit camera
 	generateForMode(selectedMode)
-	autoFitCamera()
+	if selectedMode == "spectrogram" {
+		setSpectrogramCamera()
+	} else {
+		restoreAutoRotateAfterSpectrogram()
+		autoFitCamera()
+	}
 	refreshGradient()
 	return nil
 }

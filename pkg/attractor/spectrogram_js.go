@@ -3,149 +3,87 @@
 package attractor
 
 import (
+	"strings"
 	"syscall/js"
 
 	sg "github.com/0magnet/audioprism-go/pkg/spectrogram"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
-// The spectrogram mode paints a scrolling 2D texture on the shared
-// #gocanvas: newest FFT column at the right edge, older columns slide
-// left, oldest wraps around. It owns its own shader program (a plain
-// textured quad with a scroll uniform) so it doesn't fight the 3D
-// attractor pipeline; the mode switch handles use-program bookkeeping.
+// The spectrogram is a texture *provider*: it maintains a scrolling 2D
+// texture (newest FFT column at the right, older columns wrapping around a
+// ring) and lets any geometry display it. The "spectrogram" model draws it
+// on a plane through the shared 3D pipeline (so it rotates/zooms like every
+// other model); the skin feature paints the same texture onto surface
+// models. Drawing lives in textured_js.go; this file only fills the texture.
 //
-// Sample flow: audiosrc.Source → snapshot per rAF frame → FFT → color
-// column → texSubImage2D one column at (texCol % width). uOffset in the
-// fragment shader scrolls the whole texture so the newest column always
-// lands at the right edge.
+// Sample flow: audiosrc.Source → Drain (continuous) → overlapping STFT
+// (1024 FFT, 512 hop, 50% overlap) → color column → queue → flushed to the
+// texture at a steady wall-clock rate so the scroll never stutters.
 
-const spectVertShaderSrc = `
-	attribute vec2 aPos;
-	attribute vec2 aTex;
-	varying vec2 vTex;
-	void main() {
-		gl_Position = vec4(aPos, 0.0, 1.0);
-		vTex = aTex;
-	}
-`
+// Fixed texture size, independent of canvas: width = time columns, height =
+// frequency bins. Height == FFTSize/2 makes the bin→row mapping exactly 1:1
+// at any sample rate, so we keep the full FFT resolution with no resampling.
+const (
+	spectTexW = 1024
+	spectTexH = 512
 
-const spectFragShaderSrc = `
-	precision mediump float;
-	varying vec2 vTex;
-	uniform sampler2D uSampler;
-	uniform float uOffset;
-	void main(void) {
-		float x = mod(vTex.x + uOffset, 1.0);
-		gl_FragColor = texture2D(uSampler, vec2(x, vTex.y));
-	}
-`
+	spectMaxQueue     = 120 // fast-forward the scroll if we fall this far behind
+	spectQueueCatchup = 60
+)
 
 var (
-	spectProgram  js.Value
 	spectTexture  js.Value
-	spectVBuf     js.Value
-	spectTBuf     js.Value
-	spectAPos     js.Value
-	spectATex     js.Value
-	spectUSampler js.Value
-	spectUOffset  js.Value
 	spectReady    bool
 	spectTexCol   int
-	spectTexW     int
-	spectTexH     int
-	spectColUint8 js.Value // reused Uint8Array of length spectTexH*4
+	spectColUint8 js.Value // reused Uint8Array, spectTexH*4 bytes
 
-	// Continuous-STFT state, matching audioprism-go: a sliding overlap
-	// window advanced sg.StepSize samples at a time (50% overlap at the
-	// default FFTSize=1024 / StepSize=512), fed by draining the audio
-	// source's continuous stream. spectAccum buffers samples until a full
-	// StepSize hop is available; spectDrainBuf is the per-frame drain
-	// scratch.
+	// Overlapping-STFT state. spectAccum buffers drained samples until a
+	// full StepSize hop is available; spectOverlap is the sliding window.
 	spectOverlap  []float32
 	spectAccum    []float32
 	spectDrainBuf []float32
 
-	// Column pipeline. FFT columns are produced sample-locked (bursty,
-	// since audio arrives in ~100ms chunks) into spectColQueue, then
-	// pushed to the texture at a steady wall-clock rate in flush — the
-	// decoupling that keeps the scroll smooth regardless of audio-burst
-	// timing or frame jitter (this is what audioprism-go does). Each
-	// queued column is spectTexH*4 RGBA bytes.
+	// Column pipeline: produced sample-locked (bursty) into the queue,
+	// flushed to the texture at a steady wall-clock rate.
 	spectColQueue [][]byte
-	spectLastMs   float64 // rAF timestamp of previous flush
-	spectColFrac  float64 // fractional columns carried between frames
-)
+	spectLastMs   float64
+	spectColFrac  float64
 
-// spectMaxQueue caps the pending-column backlog so a burst or a hitch
-// can't grow it without bound; beyond it we fast-forward (drop) the
-// oldest columns down to spectQueueCatchup.
-const (
-	spectMaxQueue     = 120
-	spectQueueCatchup = 60
+	// Auto-rotate is disabled for a legible face-on default and restored
+	// when leaving spectrogram mode, so other models keep their setting.
+	specSavedAutoRotate bool
+	specAutoRotateSaved bool
 )
 
 func initSpectrogram() {
 	if spectReady {
 		return
 	}
-	// Own shader program.
-	vs := gl.Call("createShader", glTypes.VertexShader)
-	gl.Call("shaderSource", vs, spectVertShaderSrc)
-	gl.Call("compileShader", vs)
-	fs := gl.Call("createShader", glTypes.FragmentShader)
-	gl.Call("shaderSource", fs, spectFragShaderSrc)
-	gl.Call("compileShader", fs)
-
-	spectProgram = gl.Call("createProgram")
-	gl.Call("attachShader", spectProgram, vs)
-	gl.Call("attachShader", spectProgram, fs)
-	gl.Call("linkProgram", spectProgram)
-
-	spectAPos = gl.Call("getAttribLocation", spectProgram, "aPos")
-	spectATex = gl.Call("getAttribLocation", spectProgram, "aTex")
-	spectUSampler = gl.Call("getUniformLocation", spectProgram, "uSampler")
-	spectUOffset = gl.Call("getUniformLocation", spectProgram, "uOffset")
-
-	// Fullscreen quad geometry — two triangles as a TRIANGLE_STRIP.
-	quadPos := []float32{-1, -1, 1, -1, -1, 1, 1, 1}
-	quadTex := []float32{0, 0, 1, 0, 0, 1, 1, 1}
-	spectVBuf = gl.Call("createBuffer")
-	gl.Call("bindBuffer", glTypes.ArrayBuffer, spectVBuf)
-	gl.Call("bufferData", glTypes.ArrayBuffer, SliceToTypedArray(quadPos), glTypes.StaticDraw)
-	spectTBuf = gl.Call("createBuffer")
-	gl.Call("bindBuffer", glTypes.ArrayBuffer, spectTBuf)
-	gl.Call("bufferData", glTypes.ArrayBuffer, SliceToTypedArray(quadTex), glTypes.StaticDraw)
-
-	// Texture sized to the current canvas dimensions. Width = number of
-	// columns (time axis); height = FFT bins (frequency axis).
-	spectTexW = width
-	spectTexH = height
 	spectTexture = gl.Call("createTexture")
 	gl.Call("bindTexture", gl.Get("TEXTURE_2D"), spectTexture)
 	gl.Call("texParameteri", gl.Get("TEXTURE_2D"), gl.Get("TEXTURE_MIN_FILTER"), gl.Get("LINEAR"))
 	gl.Call("texParameteri", gl.Get("TEXTURE_2D"), gl.Get("TEXTURE_MAG_FILTER"), gl.Get("LINEAR"))
 	gl.Call("texParameteri", gl.Get("TEXTURE_2D"), gl.Get("TEXTURE_WRAP_S"), gl.Get("CLAMP_TO_EDGE"))
 	gl.Call("texParameteri", gl.Get("TEXTURE_2D"), gl.Get("TEXTURE_WRAP_T"), gl.Get("CLAMP_TO_EDGE"))
-	zeroAB := js.Global().Get("ArrayBuffer").New(spectTexW * spectTexH * 4)
-	zeroU8 := js.Global().Get("Uint8Array").New(zeroAB)
+	zeroU8 := js.Global().Get("Uint8Array").New(spectTexW * spectTexH * 4)
 	gl.Call("texImage2D",
 		gl.Get("TEXTURE_2D"), 0, gl.Get("RGBA"),
 		spectTexW, spectTexH, 0,
 		gl.Get("RGBA"), gl.Get("UNSIGNED_BYTE"), zeroU8)
 
-	colAB := js.Global().Get("ArrayBuffer").New(spectTexH * 4)
-	spectColUint8 = js.Global().Get("Uint8Array").New(colAB)
+	spectColUint8 = js.Global().Get("Uint8Array").New(spectTexH * 4)
 
-	// The go-dsp FFT worker pool is pure overhead on single-threaded
-	// wasm (goroutines can't run in parallel here); pin it to serial.
+	// The go-dsp FFT worker pool is pure overhead on single-threaded wasm.
 	sg.SetSingleThreaded()
 
 	spectOverlap = make([]float32, sg.FFTSize)
 	spectAccum = spectAccum[:0]
-	spectDrainBuf = make([]float32, 8192) // ≥ one frame's sample backlog
+	spectDrainBuf = make([]float32, 8192)
 	spectColQueue = spectColQueue[:0]
 	spectLastMs = 0
 	spectColFrac = 0
+	spectTexCol = 0
 	spectReady = true
 }
 
@@ -156,19 +94,7 @@ func teardownSpectrogram() {
 	if !spectTexture.IsUndefined() {
 		gl.Call("deleteTexture", spectTexture)
 	}
-	if !spectVBuf.IsUndefined() {
-		gl.Call("deleteBuffer", spectVBuf)
-	}
-	if !spectTBuf.IsUndefined() {
-		gl.Call("deleteBuffer", spectTBuf)
-	}
-	if !spectProgram.IsUndefined() {
-		gl.Call("deleteProgram", spectProgram)
-	}
 	spectTexture = js.Undefined()
-	spectVBuf = js.Undefined()
-	spectTBuf = js.Undefined()
-	spectProgram = js.Undefined()
 	spectReady = false
 	spectTexCol = 0
 	spectOverlap = nil
@@ -179,25 +105,25 @@ func teardownSpectrogram() {
 	spectColFrac = 0
 }
 
-func renderSpectrogramFrame(nowMs float64) {
+// renderSpectrogramMode is the "spectrogram" model's per-frame entry point,
+// called from generateForMode. It keeps the scrolling texture current and
+// draws it on the shared plane through texProgram (so camera/rotation from
+// the normal render loop apply). nowMs is the rAF timestamp.
+func renderSpectrogramMode(nowMs float64) {
 	if !spectReady {
 		initSpectrogram()
 	}
-	src := ensureAudioSource()
+	ensureAudioSource()
+	updateSpectrogramTexture(nowMs)
+	offset := float32(spectTexCol) / float32(spectTexW)
+	drawTexturedPlane(spectTexture, offset)
+	maybeShowAudioStatus()
+}
 
-	// If the canvas has resized since init, throw away our texture and
-	// rebuild. Cheap because the texture is the only sized resource.
-	if spectTexW != width || spectTexH != height {
-		teardownSpectrogram()
-		initSpectrogram()
-	}
-
-	// Produce FFT columns from the continuous sample stream, advancing
-	// the overlapping STFT one sg.StepSize hop at a time (same short-time
-	// FFT as audioprism-go). Columns are pushed to a queue here (bursty,
-	// matching audio arrival) and flushed to the texture at a steady
-	// wall-clock rate below, so the scroll never hitches.
-	if src != nil && src.Ready() {
+// updateSpectrogramTexture drains the audio stream, advances the STFT, and
+// flushes queued columns onto the texture. No geometry is drawn here.
+func updateSpectrogramTexture(nowMs float64) {
+	if src := audioSource; src != nil && src.Ready() {
 		for {
 			n := src.Drain(spectDrainBuf)
 			if n == 0 {
@@ -220,37 +146,15 @@ func renderSpectrogramFrame(nowMs float64) {
 				spectColQueue = append(spectColQueue, col)
 			}
 		}
-		// Compact the sub-StepSize remainder back to the front, reusing
-		// the backing array so it doesn't drift/grow across frames.
 		spectAccum = append(spectAccum[:0], spectAccum[consumed:]...)
 	}
-
 	flushSpectColumns(nowMs)
-
-	gl.Call("useProgram", spectProgram)
-	gl.Call("disable", glTypes.DepthTest)
-	gl.Call("clearColor", 0, 0, 0, 1)
-	gl.Call("clear", glTypes.ColorBufferBit)
-
-	gl.Call("bindBuffer", glTypes.ArrayBuffer, spectVBuf)
-	gl.Call("enableVertexAttribArray", spectAPos)
-	gl.Call("vertexAttribPointer", spectAPos, 2, glTypes.Float, false, 0, 0)
-	gl.Call("bindBuffer", glTypes.ArrayBuffer, spectTBuf)
-	gl.Call("enableVertexAttribArray", spectATex)
-	gl.Call("vertexAttribPointer", spectATex, 2, glTypes.Float, false, 0, 0)
-
-	gl.Call("activeTexture", gl.Get("TEXTURE0"))
-	gl.Call("bindTexture", gl.Get("TEXTURE_2D"), spectTexture)
-	gl.Call("uniform1i", spectUSampler, 0)
-	// uOffset shifts so the newest column always lands at the right edge.
-	gl.Call("uniform1f", spectUOffset, float64(spectTexCol)/float64(spectTexW))
-	gl.Call("drawArrays", gl.Get("TRIANGLE_STRIP"), 0, 4)
 }
 
-// flushSpectColumns pushes queued columns onto the scrolling texture at
-// the audio column rate (SampleRate/StepSize per second), paced by
-// wall-clock time rather than frame or burst timing. Any backlog beyond
-// spectMaxQueue is fast-forwarded so we never fall permanently behind.
+// flushSpectColumns pushes queued columns onto the texture at the audio
+// column rate (SampleRate/StepSize per second), paced by wall-clock time
+// rather than frame/burst timing. Backlog beyond spectMaxQueue is
+// fast-forwarded so we never fall permanently behind.
 func flushSpectColumns(nowMs float64) {
 	if spectLastMs == 0 {
 		spectLastMs = nowMs
@@ -275,7 +179,6 @@ func flushSpectColumns(nowMs float64) {
 		uploadSpectColumn(spectColQueue[0])
 		spectColQueue = spectColQueue[1:]
 	}
-	// Fell too far behind (tab was hidden, GC hitch, …): drop oldest.
 	if len(spectColQueue) > spectMaxQueue {
 		drop := len(spectColQueue) - spectQueueCatchup
 		for i := 0; i < drop; i++ {
@@ -283,13 +186,12 @@ func flushSpectColumns(nowMs float64) {
 		}
 		spectColQueue = spectColQueue[drop:]
 	}
-	// Reset the backing slice when drained so it doesn't creep forward.
 	if len(spectColQueue) == 0 {
 		spectColQueue = spectColQueue[:0]
 	}
 }
 
-// uploadSpectColumn writes one prepared RGBA column to the current write
+// uploadSpectColumn writes one prepared RGBA column at the current write
 // position and advances the scroll cursor.
 func uploadSpectColumn(col []byte) {
 	js.CopyBytesToJS(spectColUint8, col)
@@ -301,11 +203,11 @@ func uploadSpectColumn(col []byte) {
 	spectTexCol = (spectTexCol + 1) % spectTexW
 }
 
-// buildSpectColumn maps FFT magnitudes to one RGBA texture column
-// (spectTexH*4 bytes), full 0..Nyquist band with 0 Hz at the bottom
-// (texcoord v=0 is the bottom edge) — matching audioprism-go's mapping.
+// buildSpectColumn maps FFT magnitudes to one RGBA column (spectTexH*4
+// bytes), full 0..Nyquist with 0 Hz at the bottom (v=0), matching
+// audioprism-go. With spectTexH == FFTSize/2 the bin→row map is 1:1.
 func buildSpectColumn(mags []float64) []byte {
-	if len(mags) == 0 || spectTexH == 0 {
+	if len(mags) == 0 {
 		return nil
 	}
 	col := make([]byte, spectTexH*4)
@@ -329,4 +231,69 @@ func buildSpectColumn(mags []float64) []byte {
 		col[y*4+3] = byte(a >> 8)
 	}
 	return col
+}
+
+// setSpectrogramCamera frames the plane at a sensible default distance,
+// faces it toward the camera (identity pose), and stops it tumbling —
+// randomizeOrientation's random pose + per-axis spin rates are great for
+// attractors but make the spectrogram unreadable. Auto-rotate is turned
+// off for a static default and restored on leaving the mode. Rotation
+// stays available via drag, the X/Y/Z sliders, and the auto-rotate box.
+// Used instead of autoFitCamera (which reads attractor vertices).
+func setSpectrogramCamera() {
+	initCameraDist = 4.5
+	defaultCameraDist = 4.5
+	cachedZoom = 0
+	if cameraControl.Truthy() {
+		cameraControl.Set("value", "0")
+	}
+	if sliderZoom.Truthy() {
+		sliderZoom.Set("textContent", "0")
+	}
+
+	movMatrix = mgl32.Ident4()
+	zeroRotationSliders()
+
+	if !specAutoRotateSaved {
+		specSavedAutoRotate = autoRotate
+		specAutoRotateSaved = true
+	}
+	autoRotate = false
+	if el := doc.Call("getElementById", "auto-rotate"); el.Truthy() {
+		el.Set("checked", false)
+	}
+
+	updateViewMatrix()
+	updateModelMatrix()
+}
+
+// restoreAutoRotateAfterSpectrogram puts auto-rotate back to whatever it
+// was before spectrogram mode disabled it. Called when switching to a
+// non-spectrogram model.
+func restoreAutoRotateAfterSpectrogram() {
+	if !specAutoRotateSaved {
+		return
+	}
+	autoRotate = specSavedAutoRotate
+	specAutoRotateSaved = false
+	if el := doc.Call("getElementById", "auto-rotate"); el.Truthy() {
+		el.Set("checked", autoRotate)
+	}
+}
+
+// zeroRotationSliders resets the X/Y/Z rotation-rate sliders (and the
+// Go-side cache) to zero so the plane holds still.
+func zeroRotationSliders() {
+	for _, id := range []string{"rotation-controls-x", "rotation-controls-y", "rotation-controls-z"} {
+		el := doc.Call("getElementById", id)
+		if !el.Truthy() {
+			continue
+		}
+		el.Set("value", "0")
+		out := doc.Call("getElementById", "slider-value-"+strings.TrimPrefix(id, "rotation-controls-"))
+		if out.Truthy() {
+			out.Set("textContent", "0.0")
+		}
+	}
+	readSliderCache()
 }

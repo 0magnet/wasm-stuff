@@ -4,7 +4,6 @@ package attractor
 
 import (
 	"syscall/js"
-	"unsafe"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -167,29 +166,31 @@ func setupShaders() {
 }
 
 func setupMatrices() {
-	projMatrix := mgl32.Perspective(mgl32.DegToRad(45.0), float32(width)/float32(height), 1, 100.0)
-	projMatrixBuffer := (*[16]float32)(unsafe.Pointer(&projMatrix))
-	typedProjMatrixBuffer := SliceToTypedArray([]float32((*projMatrixBuffer)[:]))
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Pmatrix"), false, typedProjMatrixBuffer)
+	// projMatrix is a pkg var (textured_js.go) so texProgram can reuse it.
+	projMatrix = mgl32.Perspective(mgl32.DegToRad(45.0), float32(width)/float32(height), 1, 100.0)
+	gl.Call("useProgram", shaderProgram)
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Pmatrix"), false, mat4ToTyped(&projMatrix))
 
 	movMatrix = mgl32.Ident4()
 	updateViewMatrix()
 	updateModelMatrix()
 }
 
+// updateViewMatrix recomputes the camera and uploads it to the attractor
+// program. texProgram receives it separately (useTexProgram reads the
+// pkg-level viewMatrix), so we force the attractor program active here to
+// keep the upload correct even if a textured draw left texProgram bound.
 func updateViewMatrix() {
 	cameraPosition := mgl32.Vec3{0.0, 0.0, defaultCameraDist}
 	center := mgl32.Vec3{0.0, 0.0, 0.0}
-	viewMatrix := mgl32.LookAtV(cameraPosition, center, mgl32.Vec3{0.0, 1.0, 0.0})
-	viewMatrixBuffer := (*[16]float32)(unsafe.Pointer(&viewMatrix))
-	typedViewMatrixBuffer := SliceToTypedArray([]float32((*viewMatrixBuffer)[:]))
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Vmatrix"), false, typedViewMatrixBuffer)
+	viewMatrix = mgl32.LookAtV(cameraPosition, center, mgl32.Vec3{0.0, 1.0, 0.0})
+	gl.Call("useProgram", shaderProgram)
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Vmatrix"), false, mat4ToTyped(&viewMatrix))
 }
 
 func updateModelMatrix() {
-	modelMatrixBuffer := (*[16]float32)(unsafe.Pointer(&movMatrix))
-	typedModelMatrixBuffer := SliceToTypedArray([]float32((*modelMatrixBuffer)[:]))
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, typedModelMatrixBuffer)
+	gl.Call("useProgram", shaderProgram)
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, mat4ToTyped(&movMatrix))
 }
 
 func autoFitCamera() {
@@ -222,10 +223,17 @@ func autoFitCamera() {
 }
 
 func generateForMode(mode string) {
-	// Audio modes render on their own shader program via
-	// renderAudioFrame; skip the attractor pipeline entirely. This
-	// path is still reached via onModeChange / buildParamPanel /
-	// paused-frame redraw, so a plain return is the correct response.
+	// Spectrogram is a textured plane drawn through the shared 3D pipeline
+	// (texProgram); update its texture and draw it, then bail out of the
+	// attractor path.
+	if mode == "spectrogram" {
+		renderSpectrogramMode(frameNowMs)
+		return
+	}
+	// xy scope draws on its own 2D program via renderAudioFrame; skip the
+	// attractor pipeline entirely. This path is still reached via
+	// onModeChange / buildParamPanel / paused-frame redraw, so a plain
+	// return is the correct response.
 	if isAudioMode(mode) {
 		return
 	}
@@ -236,6 +244,12 @@ func generateForMode(mode string) {
 	// shader program bound.
 	if audioModeActive {
 		deactivateAudioMode()
+	}
+	// Ensure the attractor program is bound — a prior spectrogram frame
+	// leaves texProgram active, and the uniform/draw calls below apply to
+	// whatever program is current.
+	if !shaderProgram.IsUndefined() {
+		gl.Call("useProgram", shaderProgram)
 	}
 	if shadersReady {
 		gl.Call("uniform1i", uGradientModeLoc, gradientMode)
@@ -309,15 +323,15 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	// entire 3D attractor pipeline for the frame. Transition helpers
 	// swap the useProgram binding when moving between attractor and
 	// audio modes so neither pipeline sees the other's state.
+	if len(args) > 0 {
+		frameNowMs = args[0].Float() // rAF timestamp (ms), used by spectrogram scroll
+	}
+
 	if isAudioMode(selectedMode) {
 		if !audioModeActive {
 			activateAudioMode()
 		}
-		var nowMs float64
-		if len(args) > 0 {
-			nowMs = args[0].Float() // rAF timestamp (ms)
-		}
-		renderAudioFrame(selectedMode, nowMs)
+		renderAudioFrame(selectedMode)
 		js.Global().Call("requestAnimationFrame", renderFrame)
 		return nil
 	}

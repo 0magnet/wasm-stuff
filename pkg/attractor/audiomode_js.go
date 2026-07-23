@@ -68,25 +68,24 @@ func queryParam(name string) string {
 	return ""
 }
 
-// isAudioMode reports whether the given mode name is one of the
-// audio-driven visualizations (spectrogram, xy). Called each frame in
-// renderLoop to decide the dispatch branch.
+// isAudioMode reports whether the mode bypasses the 3D pipeline and draws
+// on its own 2D program. Only the xy scope does now — the spectrogram is a
+// textured plane model that goes through the normal 3D render path (so it
+// rotates/zooms like other models); it's handled in generateForMode.
 func isAudioMode(mode string) bool {
-	switch mode {
-	case "spectrogram", "xy":
-		return true
-	}
-	return false
+	return mode == "xy"
 }
 
-// renderAudioFrame dispatches to the current audio mode's renderer.
-// Called from renderLoop when isAudioMode(selectedMode) is true. nowMs is
-// the requestAnimationFrame timestamp, used to pace the spectrogram's
-// scroll by wall-clock time.
-func renderAudioFrame(mode string, nowMs float64) {
+// isAudioSourceMode reports whether a mode needs the shared audio source
+// (spectrogram or xy). Used for the mic-permission status overlay.
+func isAudioSourceMode(mode string) bool {
+	return mode == "spectrogram" || mode == "xy"
+}
+
+// renderAudioFrame dispatches to a bypass audio mode's renderer (xy).
+// Called from renderLoop when isAudioMode(selectedMode) is true.
+func renderAudioFrame(mode string) {
 	switch mode {
-	case "spectrogram":
-		renderSpectrogramFrame(nowMs)
 	case "xy":
 		renderXYFrame()
 	}
