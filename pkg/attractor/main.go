@@ -209,6 +209,7 @@ var (
 	uMaxYLoc            js.Value
 	uGradientModeLoc    js.Value
 	uGradientReverseLoc js.Value
+	uPointSizeLoc       js.Value
 	positionLoc         js.Value
 	aTrailTLoc          js.Value
 	shadersReady        bool
@@ -428,6 +429,14 @@ const controlsHTML = `
   <output id="slider-value-line" style="width:20px;display:inline-block;">1</output>
   <button class="rst" id="rst-line" title="Reset">↺</button>
 </div>
+<div id="audio-mod-row" style="margin-top:4px;">
+  <span style="color:#888;">Audio mod depth:</span>
+  <label style="margin-left:6px;">Speed <input type="range" id="mod-speed" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Shape <input type="range" id="mod-shape" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Color <input type="range" id="mod-color" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Beat <input type="range" id="mod-beat" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Pump <input type="range" id="mod-pump" min="0" max="1" value="0.4" step="0.05" style="width:70px;vertical-align:middle;"></label>
+</div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
 
@@ -593,6 +602,27 @@ func Run() {
 		setAudioReactive(doc.Call("getElementById", "audio-reactive").Get("checked").Bool())
 		return nil
 	}))
+
+	// Event: audio-modulation depth sliders.
+	for _, m := range []struct {
+		id  string
+		dst *float32
+	}{
+		{"mod-speed", &modSpeed},
+		{"mod-shape", &modShape},
+		{"mod-color", &modColor},
+		{"mod-beat", &modBeat},
+		{"mod-pump", &modPump},
+	} {
+		id, dst := m.id, m.dst
+		el := doc.Call("getElementById", id)
+		el.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			if v, err := strconv.ParseFloat(el.Get("value").String(), 32); err == nil {
+				*dst = float32(v)
+			}
+			return nil
+		}))
+	}
 
 	// Event: points/line toggle
 	doc.Call("getElementById", "use-points").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {

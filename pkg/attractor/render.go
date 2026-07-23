@@ -102,11 +102,12 @@ var vertShaderCode = `
 	uniform mat4 Pmatrix;
 	uniform mat4 Vmatrix;
 	uniform mat4 Mmatrix;
+	uniform float uPointSize;
 	varying vec3 vPosition;
 	varying float vTrailT;
 	void main(void) {
 		gl_Position = Pmatrix * Vmatrix * Mmatrix * vec4(position, 1.0);
-		gl_PointSize = 2.0;
+		gl_PointSize = uPointSize;
 		vPosition = position;
 		vTrailT = aTrailT;
 	}
@@ -146,6 +147,8 @@ func setupShaders() {
 	uMaxYLoc = gl.Call("getUniformLocation", shaderProgram, "uMaxY")
 	uGradientModeLoc = gl.Call("getUniformLocation", shaderProgram, "uGradientMode")
 	uGradientReverseLoc = gl.Call("getUniformLocation", shaderProgram, "uGradientReverse")
+	uPointSizeLoc = gl.Call("getUniformLocation", shaderProgram, "uPointSize")
+	gl.Call("uniform1f", uPointSizeLoc, 2.0)
 	gl.Call("uniform3f", uBaseColorLoc, baseColor[0], baseColor[1], baseColor[2])
 	gl.Call("uniform3f", uTopColorLoc, topColor[0], topColor[1], topColor[2])
 	gl.Call("uniform3f", uMidColorLoc, midColor[0], midColor[1], midColor[2])
@@ -190,7 +193,8 @@ func updateViewMatrix() {
 
 func updateModelMatrix() {
 	gl.Call("useProgram", shaderProgram)
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, mat4ToTyped(&movMatrix))
+	m := audioModelMatrix() // movMatrix, plus audio pump scale when active
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, mat4ToTyped(&m))
 }
 
 func autoFitCamera() {
@@ -265,6 +269,10 @@ func generateForMode(mode string) {
 			gl.Call("uniform1i", uGradientReverseLoc, 0)
 		}
 	}
+	// Audio-reactive: modulate ODE params (dt, primary chaos param) for
+	// this integration step, and the colors / point size for this frame.
+	// No-op unless audio-reactive is on and the mode is an attractor.
+	saved := applyAudioModulation(mode)
 	switch mode {
 	case "lorenz":
 		generateLorenz()
@@ -313,6 +321,7 @@ func generateForMode(mode string) {
 	default:
 		generateRossler()
 	}
+	restoreAudioModulation(saved)
 }
 
 func renderLoop(this js.Value, args []js.Value) interface{} {
@@ -450,6 +459,10 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	// Auto-rotation
 	if autoRotate {
 		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(autoRotateSpeed))
+	}
+	// Audio beat → rotational kick
+	if spin := audioBeatSpin(); spin != 0 {
+		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(spin))
 	}
 
 	updateModelMatrix()

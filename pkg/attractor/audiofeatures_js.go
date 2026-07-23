@@ -153,8 +153,11 @@ func setAudioReactive(on bool) {
 	if on {
 		ensureAudioSource()
 		showAudioMeters()
-	} else if afOverlay.Truthy() {
-		afOverlay.Get("style").Set("display", "none")
+	} else {
+		if afOverlay.Truthy() {
+			afOverlay.Get("style").Set("display", "none")
+		}
+		restoreModColors() // undo any modulated colors / point size
 	}
 }
 
