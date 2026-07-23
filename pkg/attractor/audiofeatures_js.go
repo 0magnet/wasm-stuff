@@ -10,59 +10,53 @@ import (
 	sg "github.com/0magnet/audioprism-go/pkg/spectrogram"
 )
 
-// Audio-feature analysis for modulating the attractors. Each frame (when
-// "Audio reactive" is on) we snapshot the latest window from the shared
-// audio source, run one FFT, and derive a small set of smoothed, roughly
-// 0..1-normalized features. Phase 2 maps these onto ODE params, colors,
-// motion, etc. This layer is independent of the spectrogram/skin path and
-// works in any mode.
+// Audio-feature analysis for modulating the attractors. When "Audio mod"
+// is on we snapshot the latest stereo window each frame, FFT each channel,
+// and derive a small set of smoothed, ~0..1 features per channel (L / R)
+// plus a mono mix. Features are adaptively normalized so they track the
+// audio's relative dynamics, not its absolute level — modulation stays
+// constant regardless of system volume (like the spectrogram). Per-
+// parameter routing (audiomod_js.go) reads these by name.
+//
+// Feature names: amp,bass,mid,treble,centroid,beat (mono mix) and the
+// L-/R- prefixed per-channel variants (beat is mono only).
 
 var (
-	audioReactive bool
+	audioMod bool
 
-	afWindow  []float32 // reused sample window (sg.FFTSize)
-	afPrevMag []float64 // previous frame magnitudes, for onset flux
+	afWindowL []float32
+	afWindowR []float32
+	afPrevMix []float64 // previous mixed magnitudes, for onset flux
 
-	// Smoothed features in ~[0,1] (afBeat is a decaying pulse).
-	afAmp      float32
-	afBass     float32
-	afMid      float32
-	afTreble   float32
-	afCentroid float32
-	afBeat     float32
-
-	// Adaptive per-feature peaks for level-independent normalization.
-	afPeakAmp    float32
-	afPeakBass   float32
-	afPeakMid    float32
-	afPeakTreble float32
-	afPeakFlux   float32
+	afFeat = map[string]float32{} // smoothed feature values
+	afPeak = map[string]float32{} // adaptive normalization peaks
 
 	afOverlay   js.Value
-	afMeterFill [6]js.Value // meter bar fill elements
+	afMeterFill [6]js.Value
 	afFrameCnt  int
 )
 
-// afNorm scales x by an adaptive peak that rises instantly and decays
-// slowly, yielding a level-independent 0..1 value.
-func afNorm(peak *float32, x float32) float32 {
-	if x > *peak {
-		*peak = x
+// afNormMap scales x by an adaptive per-key peak (instant rise, slow
+// decay) → a level-independent 0..1 value.
+func afNormMap(key string, x float32) float32 {
+	p := afPeak[key]
+	if x > p {
+		p = x
 	} else {
-		*peak *= 0.9995
+		p *= 0.9995
 	}
-	if *peak < 1e-9 {
+	afPeak[key] = p
+	if p < 1e-9 {
 		return 0
 	}
-	r := x / *peak
+	r := x / p
 	if r > 1 {
 		r = 1
 	}
 	return r
 }
 
-// afSmooth applies asymmetric attack/decay smoothing (fast rise, slow
-// fall) so modulated params respond quickly but settle gently.
+// afSmooth: fast attack, slow release.
 func afSmooth(cur, target float32) float32 {
 	const attack, release = 0.6, 0.12
 	if target > cur {
@@ -71,37 +65,24 @@ func afSmooth(cur, target float32) float32 {
 	return cur + (target-cur)*release
 }
 
-// updateAudioFeatures refreshes the smoothed feature set. Cheap (one FFT,
-// same as the spectrogram). No-op unless audio-reactive is enabled and the
-// source is delivering samples.
-func updateAudioFeatures() {
-	if !audioReactive {
-		return
+func clamp01(x float32) float32 {
+	if x < 0 {
+		return 0
 	}
-	src := ensureAudioSource()
-	if src == nil || !src.Ready() {
-		return
+	if x > 1 {
+		return 1
 	}
-	if afWindow == nil {
-		afWindow = make([]float32, sg.FFTSize)
-	}
-	src.TimeDomain(afWindow)
+	return x
+}
 
-	// RMS loudness.
-	var sq float32
-	for _, s := range afWindow {
-		sq += s * s
-	}
-	rms := float32(math.Sqrt(float64(sq / float32(len(afWindow)))))
+// featureByName returns the current smoothed value of a feature source.
+func featureByName(name string) float32 { return afFeat[name] }
 
-	mags := sg.ComputeFFT(afWindow)
-	sr := 24000
-	if src.SampleRate() > 0 {
-		sr = src.SampleRate()
-	}
+// bandEnergies sums magnitudes in bass/mid/treble bands and computes the
+// spectral centroid (0..1) for one channel's FFT.
+func bandEnergies(mags []float64, sr int) (bass, mid, treble, centroid float64) {
 	nyq := float64(sr) / 2
-
-	var bass, mid, treble, total, cWeighted, flux float64
+	var total, cw float64
 	for i, m := range mags {
 		f := float64(i) / float64(len(mags)) * nyq
 		switch {
@@ -113,43 +94,99 @@ func updateAudioFeatures() {
 			treble += m
 		}
 		total += m
-		cWeighted += f * m
-		if afPrevMag != nil && i < len(afPrevMag) {
-			if d := m - afPrevMag[i]; d > 0 {
-				flux += d
-			}
-		}
+		cw += f * m
 	}
-	afPrevMag = mags
-
-	centroid := float32(0)
 	if total > 0 {
-		centroid = float32(cWeighted / total / nyq) // 0..1
+		centroid = cw / total / nyq
+	}
+	return
+}
+
+func rmsOf(w []float32) float32 {
+	var s float32
+	for _, x := range w {
+		s += x * x
+	}
+	return float32(math.Sqrt(float64(s / float32(len(w)))))
+}
+
+// updateAudioFeatures refreshes all features. Cheap (two FFTs/frame). No-op
+// unless Audio mod is on and the source is delivering samples.
+func updateAudioFeatures() {
+	if !audioMod {
+		return
+	}
+	src := ensureAudioSource()
+	if src == nil || !src.Ready() {
+		return
+	}
+	if afWindowL == nil {
+		afWindowL = make([]float32, sg.FFTSize)
+		afWindowR = make([]float32, sg.FFTSize)
+	}
+	src.TimeDomainStereo(afWindowL, afWindowR)
+	sr := 24000
+	if src.SampleRate() > 0 {
+		sr = src.SampleRate()
 	}
 
-	afAmp = afSmooth(afAmp, afNorm(&afPeakAmp, rms))
-	afBass = afSmooth(afBass, afNorm(&afPeakBass, float32(bass)))
-	afMid = afSmooth(afMid, afNorm(&afPeakMid, float32(mid)))
-	afTreble = afSmooth(afTreble, afNorm(&afPeakTreble, float32(treble)))
-	afCentroid = afSmooth(afCentroid, centroid)
+	setNorm := func(name string, raw float32) { afFeat[name] = afSmooth(afFeat[name], afNormMap(name, raw)) }
+	setRaw := func(name string, val float32) { afFeat[name] = afSmooth(afFeat[name], clamp01(val)) }
 
-	// Onset → decaying beat pulse: fire when normalized flux crosses a
-	// threshold and the pulse has mostly decayed (avoids re-triggering).
-	fluxN := afNorm(&afPeakFlux, float32(flux))
-	if fluxN > 0.55 && afBeat < 0.35 {
-		afBeat = 1
+	magsL := sg.ComputeFFT(afWindowL)
+	magsR := sg.ComputeFFT(afWindowR)
+	bL, mL, tL, cL := bandEnergies(magsL, sr)
+	bR, mR, tR, cR := bandEnergies(magsR, sr)
+	rL, rR := rmsOf(afWindowL), rmsOf(afWindowR)
+
+	setNorm("L-amp", rL)
+	setNorm("R-amp", rR)
+	setNorm("L-bass", float32(bL))
+	setNorm("R-bass", float32(bR))
+	setNorm("L-mid", float32(mL))
+	setNorm("R-mid", float32(mR))
+	setNorm("L-treble", float32(tL))
+	setNorm("R-treble", float32(tR))
+	setRaw("L-centroid", float32(cL))
+	setRaw("R-centroid", float32(cR))
+
+	// Mono mix = average of the raw channel values.
+	setNorm("amp", (rL+rR)/2)
+	setNorm("bass", float32((bL+bR)/2))
+	setNorm("mid", float32((mL+mR)/2))
+	setNorm("treble", float32((tL+tR)/2))
+	setRaw("centroid", float32((cL+cR)/2))
+
+	// Onset/beat from mixed-magnitude spectral flux → decaying pulse.
+	var flux float64
+	n := len(magsL)
+	if n > len(magsR) {
+		n = len(magsR)
+	}
+	if afPrevMix == nil {
+		afPrevMix = make([]float64, n)
+	}
+	for i := 0; i < n; i++ {
+		mix := (magsL[i] + magsR[i]) / 2
+		if d := mix - afPrevMix[i]; d > 0 {
+			flux += d
+		}
+		afPrevMix[i] = mix
+	}
+	if afNormMap("_flux", float32(flux)) > 0.55 && afFeat["beat"] < 0.35 {
+		afFeat["beat"] = 1
 	} else {
-		afBeat *= 0.86
+		afFeat["beat"] *= 0.86
 	}
 
 	updateAudioMeters()
 }
 
-// setAudioReactive toggles the feature layer, ensuring the audio source
-// exists (which prompts for the mic when using the default backend) and
-// showing/hiding the meter overlay.
-func setAudioReactive(on bool) {
-	audioReactive = on
+// setAudioMod toggles the feature layer + per-parameter modulation. When
+// off it also snaps the attractor state back to safety (see the reset in
+// the else branch) so an over-modulated attractor recovers.
+func setAudioMod(on bool) {
+	audioMod = on
 	if on {
 		ensureAudioSource()
 		showAudioMeters()
@@ -157,16 +194,14 @@ func setAudioReactive(on bool) {
 		if afOverlay.Truthy() {
 			afOverlay.Get("style").Set("display", "none")
 		}
-		restoreModColors() // undo any modulated colors / point size
-		// Recover cleanly: if modulation pushed the attractor out of its
-		// stable regime, snap the integrator state back to initial
-		// conditions so it re-converges with the (unmodulated) base params.
 		resetAttractorState()
 	}
+	// Rebuild the param panel so per-parameter mod controls show/hide.
+	buildParamPanel(selectedMode)
 }
 
-// showAudioMeters lazily builds a small overlay of labelled bars (amp,
-// bass, mid, treble, centroid, beat) at the top-left of the canvas.
+// showAudioMeters builds (once) a small top-left overlay of the mono
+// feature bars.
 func showAudioMeters() {
 	if !afOverlay.Truthy() {
 		labels := [6]string{"amp", "bass", "mid", "treble", "cntr", "beat"}
@@ -210,8 +245,6 @@ func showAudioMeters() {
 	afOverlay.Get("style").Set("display", "block")
 }
 
-// updateAudioMeters reflects current feature values in the overlay bars,
-// throttled to a few updates per second.
 func updateAudioMeters() {
 	if !afOverlay.Truthy() {
 		return
@@ -220,10 +253,10 @@ func updateAudioMeters() {
 	if afFrameCnt%6 != 0 {
 		return
 	}
-	vals := [6]float32{afAmp, afBass, afMid, afTreble, afCentroid, afBeat}
-	for i, v := range vals {
+	names := [6]string{"amp", "bass", "mid", "treble", "centroid", "beat"}
+	for i, nm := range names {
 		if afMeterFill[i].Truthy() {
-			afMeterFill[i].Get("style").Set("width", strconv.FormatFloat(float64(v*100), 'f', 0, 64)+"%")
+			afMeterFill[i].Get("style").Set("width", strconv.FormatFloat(float64(afFeat[nm]*100), 'f', 0, 64)+"%")
 		}
 	}
 }

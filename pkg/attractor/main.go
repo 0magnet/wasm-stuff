@@ -366,7 +366,7 @@ const controlsHTML = `
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="spectro-skin"> Spectrogram skin</label>
-  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="audio-reactive"> Audio reactive</label>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="audio-mod"> Audio mod</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
   <button id="pause-btn" class="ctrl-btn">Pause</button>
   <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
@@ -427,14 +427,6 @@ const controlsHTML = `
   <label style="margin-left:8px;">Line <input type="range" id="line-width" min="1" max="10" value="1" step="1" style="width:80px;vertical-align:middle;"></label>
   <output id="slider-value-line" style="width:20px;display:inline-block;">1</output>
   <button class="rst" id="rst-line" title="Reset">↺</button>
-</div>
-<div id="audio-mod-row" style="margin-top:4px;">
-  <span style="color:#888;">Audio mod depth (±invert, 0=off):</span>
-  <label style="margin-left:6px;">Speed <input type="range" id="mod-speed" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Shape <input type="range" id="mod-shape" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Color <input type="range" id="mod-color" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Beat <input type="range" id="mod-beat" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Pump <input type="range" id="mod-pump" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
 </div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
@@ -595,33 +587,13 @@ func Run() {
 		return nil
 	}))
 
-	// Event: audio-reactive checkbox — enable feature extraction that
-	// modulates the attractors from the live audio.
-	doc.Call("getElementById", "audio-reactive").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		setAudioReactive(doc.Call("getElementById", "audio-reactive").Get("checked").Bool())
+	// Event: audio-mod checkbox — enable per-parameter audio modulation.
+	// The per-parameter routing controls appear under each attractor
+	// parameter (built by buildParamPanel) while this is checked.
+	doc.Call("getElementById", "audio-mod").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		setAudioMod(doc.Call("getElementById", "audio-mod").Get("checked").Bool())
 		return nil
 	}))
-
-	// Event: audio-modulation depth sliders.
-	for _, m := range []struct {
-		id  string
-		dst *float32
-	}{
-		{"mod-speed", &modSpeed},
-		{"mod-shape", &modShape},
-		{"mod-color", &modColor},
-		{"mod-beat", &modBeat},
-		{"mod-pump", &modPump},
-	} {
-		id, dst := m.id, m.dst
-		el := doc.Call("getElementById", id)
-		el.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			if v, err := strconv.ParseFloat(el.Get("value").String(), 32); err == nil {
-				*dst = float32(v)
-			}
-			return nil
-		}))
-	}
 
 	// Event: points/line toggle
 	doc.Call("getElementById", "use-points").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
@@ -1490,6 +1462,59 @@ func buildParamPanel(mode string) {
 		span.Call("appendChild", numInput)
 		span.Call("appendChild", rst)
 		span.Call("appendChild", stepInput)
+
+		// Per-parameter audio-mod routing (only while Audio mod is on):
+		// a source dropdown + a signed level slider. Config persists in
+		// paramMods across panel rebuilds and mode switches.
+		if audioMod {
+			id := p.ID
+			cur := paramMods[id]
+
+			sep := doc.Call("createElement", "span")
+			sep.Set("textContent", " ⟿")
+			sep.Set("style", "color:#8cf;margin-left:4px;")
+			span.Call("appendChild", sep)
+
+			sel := doc.Call("createElement", "select")
+			sel.Set("title", "Audio source for "+p.Label)
+			sel.Set("style", "background:#12203a;color:#8cf;border:1px solid #446;font-size:10px;vertical-align:middle;margin-left:2px;")
+			for _, s := range modSources {
+				opt := doc.Call("createElement", "option")
+				opt.Set("value", s.name)
+				opt.Set("textContent", s.label)
+				if s.name == cur.source {
+					opt.Set("selected", true)
+				}
+				sel.Call("appendChild", opt)
+			}
+			sel.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+				m := paramMods[id]
+				m.source = sel.Get("value").String()
+				paramMods[id] = m
+				return nil
+			}))
+
+			lvl := doc.Call("createElement", "input")
+			lvl.Set("type", "range")
+			lvl.Set("min", "-1")
+			lvl.Set("max", "1")
+			lvl.Set("step", "0.01")
+			lvl.Set("value", strconv.FormatFloat(float64(cur.level), 'g', -1, 32))
+			lvl.Set("title", "Mod level for "+p.Label+" (± inverts, 0 = off)")
+			lvl.Set("style", "width:60px;margin-left:2px;vertical-align:middle;")
+			lvl.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+				if v, err := strconv.ParseFloat(lvl.Get("value").String(), 32); err == nil {
+					m := paramMods[id]
+					m.level = float32(v)
+					paramMods[id] = m
+				}
+				return nil
+			}))
+
+			span.Call("appendChild", sel)
+			span.Call("appendChild", lvl)
+		}
+
 		paramsDiv.Call("appendChild", span)
 	}
 	if rebindParamWheel != nil {

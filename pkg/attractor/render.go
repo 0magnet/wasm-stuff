@@ -193,8 +193,7 @@ func updateViewMatrix() {
 
 func updateModelMatrix() {
 	gl.Call("useProgram", shaderProgram)
-	m := audioModelMatrix() // movMatrix, plus audio pump scale when active
-	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, mat4ToTyped(&m))
+	gl.Call("uniformMatrix4fv", gl.Call("getUniformLocation", shaderProgram, "Mmatrix"), false, mat4ToTyped(&movMatrix))
 }
 
 func autoFitCamera() {
@@ -459,10 +458,6 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 	// Auto-rotation
 	if autoRotate {
 		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(autoRotateSpeed))
-	}
-	// Audio beat → rotational kick
-	if spin := audioBeatSpin(); spin != 0 {
-		movMatrix = movMatrix.Mul4(mgl32.HomogRotate3DY(spin))
 	}
 
 	updateModelMatrix()
