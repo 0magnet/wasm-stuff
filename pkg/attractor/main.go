@@ -327,6 +327,7 @@ const controlsHTML = `
 .row{display:flex;flex-wrap:wrap;align-items:center;gap:5px 12px;margin-bottom:5px;}
 .grp{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;color:#aaa;}
 .grp label{color:#aaa;}
+.pcell{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px;white-space:nowrap;vertical-align:top;}
 .numin{width:58px;background:#222;color:#ccc;border:1px solid #555;font-family:monospace;font-size:11px;padding:1px 3px;}
 .row input[type=range]{vertical-align:middle;}
 .sep{width:1px;height:16px;background:#444;margin:0 2px;}
@@ -1409,15 +1410,18 @@ func buildParamPanel(mode string) {
 		p := p // capture for closure
 		dec := decimalsForStep(p.Step)
 
+		// Each parameter is a 2-row cell: the control on top, its
+		// audio-mod routing directly beneath. The cell keeps its rows
+		// together so the panel wraps by whole parameter.
 		span := doc.Call("createElement", "span")
-		// .grp keeps each parameter (label + slider + number + reset +
-		// step + mod controls) on one line so the row wraps by whole
-		// parameters rather than mid-control.
-		span.Set("className", "grp")
+		span.Set("className", "pcell")
+
+		topRow := doc.Call("createElement", "span")
+		topRow.Set("className", "grp")
 
 		lbl := doc.Call("createElement", "span")
 		lbl.Set("textContent", p.Label+" ")
-		span.Call("appendChild", lbl)
+		topRow.Call("appendChild", lbl)
 
 		stepStr := strconv.FormatFloat(float64(p.Step), 'g', -1, 32)
 		minStr := strconv.FormatFloat(float64(p.Min), 'g', -1, 32)
@@ -1501,26 +1505,31 @@ func buildParamPanel(mode string) {
 			return nil
 		}))
 
-		span.Call("appendChild", slider)
-		span.Call("appendChild", numInput)
-		span.Call("appendChild", rst)
-		span.Call("appendChild", stepInput)
+		topRow.Call("appendChild", slider)
+		topRow.Call("appendChild", numInput)
+		topRow.Call("appendChild", rst)
+		topRow.Call("appendChild", stepInput)
+		span.Call("appendChild", topRow)
 
 		// Per-parameter audio-mod routing (only while Audio mod is on):
-		// a source dropdown + a signed level slider. Config persists in
-		// paramMods across panel rebuilds and mode switches.
+		// on the row below the parameter — a source dropdown + a signed
+		// level slider. Config persists in paramMods across panel
+		// rebuilds and mode switches.
 		if audioMod {
 			id := p.ID
 			cur := paramMods[id]
 
+			modRow := doc.Call("createElement", "span")
+			modRow.Set("className", "grp")
+
 			sep := doc.Call("createElement", "span")
-			sep.Set("textContent", " ⟿")
-			sep.Set("style", "color:#8cf;margin-left:4px;")
-			span.Call("appendChild", sep)
+			sep.Set("textContent", "⟿")
+			sep.Set("style", "color:#8cf;")
+			modRow.Call("appendChild", sep)
 
 			sel := doc.Call("createElement", "select")
 			sel.Set("title", "Audio source for "+p.Label)
-			sel.Set("style", "background:#12203a;color:#8cf;border:1px solid #446;font-size:10px;vertical-align:middle;margin-left:2px;")
+			sel.Set("style", "background:#12203a;color:#8cf;border:1px solid #446;font-size:10px;vertical-align:middle;")
 			for _, s := range modSources {
 				opt := doc.Call("createElement", "option")
 				opt.Set("value", s.name)
@@ -1544,7 +1553,7 @@ func buildParamPanel(mode string) {
 			lvl.Set("step", "0.01")
 			lvl.Set("value", strconv.FormatFloat(float64(cur.level), 'g', -1, 32))
 			lvl.Set("title", "Mod level for "+p.Label+" (± inverts, 0 = off)")
-			lvl.Set("style", "width:60px;margin-left:2px;vertical-align:middle;")
+			lvl.Set("style", "width:70px;vertical-align:middle;")
 			lvl.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 				if v, err := strconv.ParseFloat(lvl.Get("value").String(), 32); err == nil {
 					m := paramMods[id]
@@ -1554,8 +1563,9 @@ func buildParamPanel(mode string) {
 				return nil
 			}))
 
-			span.Call("appendChild", sel)
-			span.Call("appendChild", lvl)
+			modRow.Call("appendChild", sel)
+			modRow.Call("appendChild", lvl)
+			span.Call("appendChild", modRow)
 		}
 
 		paramsDiv.Call("appendChild", span)
