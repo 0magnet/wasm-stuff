@@ -333,6 +333,10 @@ func renderLoop(this js.Value, args []js.Value) interface{} {
 		frameNowMs = args[0].Float() // rAF timestamp (ms), used by spectrogram scroll
 	}
 
+	// Refresh audio features (no-op unless audio-reactive is on); Phase 2
+	// mappings read these to modulate the attractors.
+	updateAudioFeatures()
+
 	if isAudioMode(selectedMode) {
 		if !audioModeActive {
 			activateAudioMode()

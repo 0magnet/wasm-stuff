@@ -366,6 +366,7 @@ const controlsHTML = `
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="auto-rotate" checked> Auto-rotate</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="use-points"> Points</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="spectro-skin"> Spectrogram skin</label>
+  <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="audio-reactive"> Audio reactive</label>
   <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="show-info"> Info</label>
   <button id="pause-btn" class="ctrl-btn">Pause</button>
   <button id="stop-btn" class="ctrl-btn" style="background:#c00;color:#fff;border-color:#900;font-weight:bold;">Stop Rendering</button>
@@ -583,6 +584,13 @@ func Run() {
 		spectroSkin = doc.Call("getElementById", "spectro-skin").Get("checked").Bool()
 		skinDirty = true
 		generateForMode(selectedMode)
+		return nil
+	}))
+
+	// Event: audio-reactive checkbox — enable feature extraction that
+	// modulates the attractors from the live audio.
+	doc.Call("getElementById", "audio-reactive").Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		setAudioReactive(doc.Call("getElementById", "audio-reactive").Get("checked").Bool())
 		return nil
 	}))
 
