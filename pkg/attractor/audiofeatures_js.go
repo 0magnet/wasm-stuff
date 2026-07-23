@@ -158,6 +158,10 @@ func setAudioReactive(on bool) {
 			afOverlay.Get("style").Set("display", "none")
 		}
 		restoreModColors() // undo any modulated colors / point size
+		// Recover cleanly: if modulation pushed the attractor out of its
+		// stable regime, snap the integrator state back to initial
+		// conditions so it re-converges with the (unmodulated) base params.
+		resetAttractorState()
 	}
 }
 

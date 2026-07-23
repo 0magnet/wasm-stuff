@@ -429,12 +429,12 @@ const controlsHTML = `
   <button class="rst" id="rst-line" title="Reset">↺</button>
 </div>
 <div id="audio-mod-row" style="margin-top:4px;">
-  <span style="color:#888;">Audio mod depth:</span>
-  <label style="margin-left:6px;">Speed <input type="range" id="mod-speed" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Shape <input type="range" id="mod-shape" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Color <input type="range" id="mod-color" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Beat <input type="range" id="mod-beat" min="0" max="1" value="0.5" step="0.05" style="width:70px;vertical-align:middle;"></label>
-  <label style="margin-left:6px;">Pump <input type="range" id="mod-pump" min="0" max="1" value="0.4" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <span style="color:#888;">Audio mod depth (±invert, 0=off):</span>
+  <label style="margin-left:6px;">Speed <input type="range" id="mod-speed" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Shape <input type="range" id="mod-shape" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Color <input type="range" id="mod-color" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Beat <input type="range" id="mod-beat" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
+  <label style="margin-left:6px;">Pump <input type="range" id="mod-pump" min="-1" max="1" value="0" step="0.05" style="width:70px;vertical-align:middle;"></label>
 </div>
 <div id="runtime" style="color:#555;font-size:11px;"></div>
 `
@@ -1323,8 +1323,14 @@ func resetAttractorState() {
 }
 
 // checkDiverged returns true and resets state if the attractor has diverged (NaN or >1e6).
+// checkDiverged resets the integrator state if it has blown up. The bound
+// is well above every attractor's normal extent (tens of units) but low
+// enough to catch an off-screen blow-up promptly — so an over-modulated
+// attractor recovers on its own once the offending depth is dialed back,
+// rather than drifting invisibly at huge coordinates.
 func checkDiverged() bool {
-	if x != x || y != y || z != z || x > 1e6 || x < -1e6 || y > 1e6 || y < -1e6 || z > 1e6 || z < -1e6 {
+	const lim = 1e4
+	if x != x || y != y || z != z || x > lim || x < -lim || y > lim || y < -lim || z > lim || z < -lim {
 		resetAttractorState()
 		return true
 	}

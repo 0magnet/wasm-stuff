@@ -19,12 +19,18 @@ import (
 //	modColor : hue/brightness  <- centroid/amp
 //	modBeat  : rotation kick + point-size pop <- onset
 //	modPump  : per-axis scale  <- bass/mid/treble (anisotropic breathing)
+//
+// Depths default to 0 (modulation off) and are signed: negative inverts
+// the mapping. Kept intentionally dormant until dialed in — these coarse
+// global mappings are placeholders pending the precise per-parameter
+// routing; a nonzero depth here can still over-modulate delicate
+// attractors, but the divergence/​toggle-off reset guarantees recovery.
 var (
-	modSpeed float32 = 0.5
-	modShape float32 = 0.5
-	modColor float32 = 0.5
-	modBeat  float32 = 0.5
-	modPump  float32 = 0.4
+	modSpeed float32
+	modShape float32
+	modColor float32
+	modBeat  float32
+	modPump  float32
 )
 
 type savedParam struct {
@@ -41,23 +47,31 @@ func applyAudioModulation(mode string) []savedParam {
 	}
 	params := attractorParams[mode]
 	var saved []savedParam
-	// dt (params[0]) <- amp: multiplicative, up to ~3.5x when loud.
-	if modSpeed > 0 && len(params) > 0 {
+	// dt (params[0]) <- amp: multiplicative (negative depth = slower).
+	if modSpeed != 0 && len(params) > 0 {
 		pd := params[0]
 		base := *pd.Value
 		saved = append(saved, savedParam{pd.Value, base})
 		*pd.Value = clampF(base*(1+modSpeed*afAmp*2.5), pd.Min, pd.Max)
 	}
-	// primary chaos param (params[1]) <- bass: additive toward its max.
-	if modShape > 0 && len(params) > 1 {
+	// primary chaos param (params[1]) <- bass (negative depth = toward min).
+	if modShape != 0 && len(params) > 1 {
 		pd := params[1]
 		base := *pd.Value
 		saved = append(saved, savedParam{pd.Value, base})
-		*pd.Value = clampF(base+modShape*afBass*(pd.Max-base), pd.Min, pd.Max)
+		span := pd.Max - base
+		if modShape < 0 {
+			span = base - pd.Min
+		}
+		*pd.Value = clampF(base+modShape*afBass*span, pd.Min, pd.Max)
 	}
 	applyModColors()
 	if !uPointSizeLoc.IsUndefined() {
-		gl.Call("uniform1f", uPointSizeLoc, float64(2.0+modBeat*afBeat*10.0))
+		ps := 2.0 + modBeat*afBeat*10.0
+		if ps < 0.5 {
+			ps = 0.5
+		}
+		gl.Call("uniform1f", uPointSizeLoc, float64(ps))
 	}
 	return saved
 }
@@ -74,7 +88,7 @@ func restoreAudioModulation(saved []savedParam) {
 // audio-driven anisotropic scale (bass=X, mid=Y, treble=Z) folded in when
 // the pump is active on an attractor. movMatrix itself stays pure rotation.
 func audioModelMatrix() mgl32.Mat4 {
-	if !audioReactive || modPump <= 0 || !isAttractorMode(selectedMode) {
+	if !audioReactive || modPump == 0 || !isAttractorMode(selectedMode) {
 		return movMatrix
 	}
 	sx := 1 + modPump*afBass*0.6
@@ -86,7 +100,7 @@ func audioModelMatrix() mgl32.Mat4 {
 // audioBeatSpin returns an extra Y-rotation (radians) to apply this frame
 // from the onset pulse, so beats give the model a rotational kick.
 func audioBeatSpin() float32 {
-	if !audioReactive || modBeat <= 0 {
+	if !audioReactive || modBeat == 0 {
 		return 0
 	}
 	return modBeat * afBeat * 0.12
@@ -95,7 +109,7 @@ func audioBeatSpin() float32 {
 // applyModColors uploads hue-rotated, amp-brightened versions of the base
 // gradient colors for this frame (relative to the picker values).
 func applyModColors() {
-	if modColor <= 0 {
+	if modColor == 0 {
 		return
 	}
 	hue := modColor * (afCentroid - 0.5) * 0.5  // up to ±0.25 hue turn
